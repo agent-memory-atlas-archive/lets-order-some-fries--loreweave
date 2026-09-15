@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { capture, readNoteRaw } from '../src/capture.js';
 import { scanVault } from '../src/vault/scan.js';
 import { indexVault } from '../src/index/indexer.js';
+import { openContext, ensureIndexed } from '../src/context.js';
+import { parseNote } from '../src/vault/parse.js';
 import { openStore } from '../src/store/db.js';
 import { ConfigSchema } from '../src/config.js';
 
@@ -240,3 +242,42 @@ describe('what counts as a note', () => {
     ]);
   });
 });
+
+describe('an index built by a version with the old, looser gate', () => {
+  it('drops the rows the current gate would never create, on the next open', async () => {
+    // The gate stops NEW leaks; it does nothing about what 0.36.2 already
+    // wrote. Measured against the published packages: index a vault with
+    // `ln -s ~/.ssh/id_rsa vault/leak.md` under 0.36.2, upgrade to 0.37.0, and
+    // `lore search` STILL returns the key material — snippet and all — because
+    // ensureIndexed only indexes when the notes table is empty and the
+    // incremental indexer only ever revisits files the scan still yields.
+    // A user who searches but never runs `lore index` by hand keeps serving
+    // the secret forever.
+    const base = await mkdtemp(join(tmpdir(), 'lw-stale-'));
+    const root = join(base, 'vault');
+    const outside = join(base, 'outside');
+    await mkdir(root, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(root, 'real.md'), '# Real\n\nordinary content\n');
+    await writeFile(join(outside, 'id_rsa'), 'PRIVATE KEY material zzzstale0001\n');
+    await symlink(join(outside, 'id_rsa'), join(root, 'leak.md'));
+
+    const ctx = openContext(root);
+    await indexVault(ctx.store, ctx.root);
+    // What the old version recorded: the link followed, its content stored.
+    ctx.store.upsertNote(parseNote('leak.md', 'PRIVATE KEY material zzzstale0001\n', 1));
+    expect(ctx.store.searchLexical('zzzstale0001', 5).length).toBeGreaterThan(0); // precondition
+
+    // The user searches. They never run `lore index`.
+    await ensureIndexed(ctx);
+
+    expect(ctx.store.searchLexical('zzzstale0001', 5)).toEqual([]);
+    const notes = (ctx.store.db.prepare('SELECT path FROM notes').all() as { path: string }[]).map(
+      (r) => r.path,
+    );
+    expect(notes).not.toContain('leak.md');
+    expect(notes).toContain('real.md'); // the genuine note is untouched
+    ctx.close();
+  });
+});
+

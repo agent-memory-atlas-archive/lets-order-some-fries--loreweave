@@ -1,7 +1,7 @@
 {
   "name": "loreweave",
   "mcpName": "io.github.lets-order-some-fries/loreweave",
-  "version": "0.37.0",
+  "version": "0.37.1",
   "description": "A temporal knowledge engine for markdown vaults — indexes, links, remembers, forgets, and dreams. Local-first, agent-ready (MCP).",
   "type": "module",
   "license": "MIT",

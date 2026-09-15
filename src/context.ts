@@ -5,7 +5,8 @@ import { resolveProvider, type EmbeddingProvider } from './embed/index.js';
 import { buildGraph, type LoreGraph } from './graph/build.js';
 import { buildNoteLinkGraph, type NoteLinkGraph } from './retrieve/expand.js';
 import { configIndexOptions, indexVault } from './index/indexer.js';
-import { scanVault } from './vault/scan.js';
+import { scanVault, whyNotNote } from './vault/scan.js';
+import { NOTE_GATE_VERSION } from './store/schema.js';
 
 /** Shared runtime handle passed to retrieval, facts, dream, CLI, MCP. */
 export interface LoreContext {
@@ -94,12 +95,52 @@ export function openContext(root: string, overrides?: { dbFile?: string }): Lore
  *
  * Costs one scan the first time and nothing afterwards.
  */
+/**
+ * Drop rows the current definition of "note" would never create.
+ *
+ * The incremental indexer only revisits files the scan still yields, so a row
+ * for a path the scan has stopped yielding is never reconsidered — it simply
+ * stays searchable. When 0.37.0 narrowed the definition, every index built
+ * before it kept exactly those rows, and for a symlink named *.md that pointed
+ * at something else, the row holds that file's contents. Measured against the
+ * published packages: index under 0.36.2, upgrade, and `lore search` still
+ * returns the private key, because nothing on the search path reconciles.
+ *
+ * Runs once per definition change, stamped in meta, over the note paths
+ * already in the store — no vault walk. A read-only index skips it; the stamp
+ * stays mismatched and the next writable open does the work.
+ */
+export function reconcileNoteGate(ctx: LoreContext): number {
+  const stamped = Number(ctx.store.getMeta('note_gate_version') ?? 0);
+  if (stamped === NOTE_GATE_VERSION) return 0;
+  const paths = (ctx.store.db.prepare('SELECT path FROM notes').all() as { path: string }[]).map(
+    (r) => r.path,
+  );
+  let dropped = 0;
+  try {
+    for (const p of paths) {
+      if (whyNotNote(p, { ignore: ctx.config.ignore, root: ctx.root }) === null) continue;
+      ctx.store.deleteNote(p);
+      dropped++;
+    }
+    ctx.store.setMeta('note_gate_version', String(NOTE_GATE_VERSION));
+  } catch (err) {
+    if (!ctx.store.readonly) throw err;
+    return dropped;
+  }
+  if (dropped > 0) ctx.invalidateGraph?.();
+  return dropped;
+}
+
 export async function ensureIndexed(
   ctx: LoreContext,
   onFirstIndex?: (noteCount: number) => void,
 ): Promise<boolean> {
   const row = ctx.store.db.prepare('SELECT COUNT(*) c FROM notes').get() as { c: number };
-  if (row.c > 0) return false;
+  if (row.c > 0) {
+    reconcileNoteGate(ctx);
+    return false;
+  }
   const files = await scanVault(ctx.root, ctx.config.ignore);
   if (files.length === 0) return false; // genuinely empty vault: "no results" is true
   onFirstIndex?.(files.length);

@@ -18,6 +18,21 @@
  */
 export const PARSER_VERSION = 2;
 
+/**
+ * What counts as a NOTE, versioned so a change to the definition repairs the
+ * indexes earlier versions built under the old one.
+ *
+ * Bumping PARSER_VERSION only clears fingerprints, which makes the next index
+ * REPARSE files the scan still yields — it can never remove a row for a file
+ * the scan no longer yields at all. 0.37.0 narrowed the definition (a symlink
+ * named *.md whose target is not a note, hidden and ignored directories,
+ * derived prefixes), so every index built before it carries rows the engine
+ * would now refuse to create, and the incremental indexer never revisits them.
+ * For the symlink case those rows hold the contents of whatever the link
+ * pointed at. Bump this whenever whyNotNote's answer changes for any path.
+ */
+export const NOTE_GATE_VERSION = 1;
+
 export const MIGRATIONS: string[] = [
   // v1 — initial schema
   `

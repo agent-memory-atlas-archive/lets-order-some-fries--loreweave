@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.37.1 — 2026-09-15
+
+- **An index built before 0.37.0 is repaired on the next open.** 0.37.0 narrowed
+  what counts as a note, which stopped new leaks but did nothing about rows the
+  older versions had already written. The incremental indexer only ever revisits
+  files the scan still yields, and `ensureIndexed` only ran at all when the index
+  was empty — so a vault indexed under 0.36.2 with a symlink named `*.md`
+  pointing at a private key kept returning that key's contents from `lore search`
+  after the upgrade, snippet and all, for as long as the user never ran
+  `lore index` by hand. Opening the vault now drops every row the current
+  definition would refuse to create, once, stamped in the index so it costs
+  nothing thereafter. If you upgraded to 0.37.0, this is the release that
+  actually cleans up.
+
 ## 0.37.0 — 2026-09-08
 
 A note could run code at index time, and three things the engine was saying
