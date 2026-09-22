@@ -205,6 +205,57 @@ describe('code fences do not leak into the graph or the outline', () => {
     expect(targets).toEqual(['AlsoReal', 'RealTarget']);
   });
 
+  it('does not extract #tags from inside a code fence', async () => {
+    // extractLinks masks code, extractInlineTags did not: the two extractors
+    // drifted apart. A pasted stylesheet turned every hex colour into a tag and
+    // a pasted C header turned #include/#define into tags — each one a
+    // first-class entity, and each one fanned out to every block of the note.
+    const n = parseNote(
+      'snippet.md',
+      'Prose with a #real-tag in it.\n\n' +
+        '```css\n.a { color: #aabbcc; border-color: #ddeeff; }\n```\n\n' +
+        '```c\n#include <stdio.h>\n#define BOUNDARY 1\n```\n\n' +
+        'Closing prose.\n',
+      1,
+    );
+    expect(n.tags).toEqual(['real-tag']);
+  });
+
+  it('does not extract #tags from a fence split across blocks', async () => {
+    // Same carry-the-open-fence problem extractLinks already solves: chunkText
+    // splits an oversized fenced block, and every chunk after the first lost
+    // its opening ``` so masking alone could not blank it.
+    const filler = 'word '.repeat(400).trim();
+    const n = parseNote(
+      'big.md',
+      '```c\n' + filler + '\n\n#define PHANTOM 1\n#include <phantom.h>\n```\n',
+      1,
+    );
+    expect(n.blocks.length).toBeGreaterThan(1); // the fence really did split
+    expect(n.tags).toEqual([]);
+  });
+
+  it('tag count does not grow with the size of a pasted code block', async () => {
+    // The property, not a wall-clock threshold: note-level tags fan out to
+    // every block, so tags growing with pasted-code size made graph edges
+    // quadratic in one note's length (measured: 167KB paste -> 279,807 edges).
+    // distinct colour per rule, as a real stylesheet has — so the junk tag set
+    // genuinely grows with the paste instead of deduplicating away
+    const rule = (i: number) =>
+      `.r${i} { color: #${i.toString(16).padStart(6, '0')}; background: #${(i + 4096)
+        .toString(16)
+        .padStart(6, '0')}; }`;
+    const build = (n: number) =>
+      'Notes about styling. #real-tag\n\n```css\n' +
+      Array.from({ length: n }, (_, i) => rule(i)).join('\n') +
+      '\n```\n';
+    const small = parseNote('s.md', build(50), 1);
+    const large = parseNote('l.md', build(800), 1);
+    expect(large.blocks.length).toBeGreaterThan(small.blocks.length); // really bigger
+    expect(small.tags).toEqual(['real-tag']);
+    expect(large.tags).toEqual(['real-tag']);
+  });
+
   it('a ~~~ line inside a ``` fence does not turn code into a heading', async () => {
     // splitSections tracked a single inFence boolean and flipped it on ANY
     // fence marker, so a lone ~~~ inside a ``` block turned fence state OFF and

@@ -16,7 +16,7 @@
  * openStore then clears note fingerprints (migration v5's move) so the next
  * incremental run reparses everything.
  */
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 /**
  * What counts as a NOTE, versioned so a change to the definition repairs the

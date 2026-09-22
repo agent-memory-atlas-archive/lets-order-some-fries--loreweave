@@ -115,8 +115,15 @@ function extractLinks(rawText: string, blockAnchor: string, openFence: string | 
   return out;
 }
 
-/** Inline #tags (not headings, not URL fragments). */
-function extractInlineTags(text: string): string[] {
+/** Inline #tags (not headings, not URL fragments), never from inside code. */
+function extractInlineTags(rawText: string, openFence: string | null = null): string[] {
+  // Exactly the masking extractLinks applies, and for the same reason: a '#'
+  // inside a fence is a hex colour, a C preprocessor directive or a shell
+  // comment, not a tag. The two extractors had drifted apart, so a pasted
+  // stylesheet made every colour a first-class entity. Prepending the still-open
+  // fence delimiter covers a fence chunkText split across blocks; tags carry no
+  // offsets, so shifting the string is harmless.
+  const text = maskCode(openFence ? `${openFence}\n${rawText}` : rawText);
   const tags = new Set<string>();
   // A tag: '#' preceded by start/whitespace/'(' and followed by a word char;
   // allows letters, digits, -, _, / and unicode letters.
@@ -449,7 +456,7 @@ export function parseNote(path: string, raw: string, mtimeMs: number, size?: num
         hash: sha1(chunk),
       });
       links.push(...extractLinks(chunk, anchor, openFence));
-      for (const t of extractInlineTags(chunk)) tagSet.add(t);
+      for (const t of extractInlineTags(chunk, openFence)) tagSet.add(t);
       openFence = fenceStateAfter(chunk, openFence);
     }
     // heading-only sections still contribute their heading as context for
