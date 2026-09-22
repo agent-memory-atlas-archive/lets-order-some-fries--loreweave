@@ -258,6 +258,11 @@ markdown, so an agent's memory is something you can open, edit, and `git diff`:
 
 Delete `.lore/` and reindex — every fact and edge is reconstructed from those files.
 
+`- [fact]` lines are replayed out of any note, but the `source=` attribute is read back
+only under `lore/journal/`, which is the only path loreweave writes. The same line in an
+ordinary note still records the fact, as `extracted` — a note can state something; it
+cannot say that *you* stated it.
+
 **Compared to hosted memory services** (Mem0, Zep): those run LLMs at write time to
 extract and summarize into their own store; loreweave runs no model in the core, keeps
 memory in your files under your version control, and makes every retrieval

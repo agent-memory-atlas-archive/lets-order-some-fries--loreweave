@@ -317,7 +317,21 @@ export function rebuildFactsFromNotes(store: Store, mode: ExtractionMode = 'expl
         ].join('|');
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
-        const rawSource = f.attrs.source ?? (journal ? 'stated' : 'extracted');
+        // A `source=` attribute is honoured only under lore/journal/, which is
+        // the path assertFact writes and nothing else does. Everywhere else the
+        // line is note content, and note content may state something but may
+        // not say who stated it: `{source=stated}` in a clipped article made
+        // `lore facts` print "asserted", told the agent over MCP "stated: user
+        // said it", and — because extractStructuredFacts refuses to touch a
+        // slot a stated row occupies — pinned the forged value against the
+        // vault's own frontmatter. Measured on a vault whose ambuj.md declared
+        // `employer: Motherson`, the only employer fact in the store came from
+        // the clipped note.
+        //
+        // Reading it as a default rather than as a claim costs the documented
+        // journal round-trip nothing: assertFact writes the attribute and the
+        // replay reads it back, byte for byte, exactly as before.
+        const rawSource = journal ? (f.attrs.source ?? 'stated') : 'extracted';
         const sourceType = VALID_SOURCE_TYPES.has(rawSource) ? rawSource : 'extracted';
         const conf = Number(f.attrs.confidence);
         ins.run(
