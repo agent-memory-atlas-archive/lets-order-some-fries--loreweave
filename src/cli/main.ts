@@ -17,6 +17,8 @@ import {
   assertFact,
   invalidateFact,
   queryFacts,
+  queryFactsPage,
+  DEFAULT_FACT_LIMIT,
 } from '../facts/model.js';
 import { dream, findStale } from '../dream/dream.js';
 import { capture } from '../capture.js';
@@ -366,14 +368,20 @@ export function buildProgram(io: { out: (s: string) => void; err: (s: string) =>
             : when.kind === 'history'
               ? { includeHistory: true }
               : {};
-        const [passages, facts] = [
-          await search(ctx, q, { k: 5 }),
-          queryFacts(ctx.store, factQuery),
-        ];
         // Match facts on content words only, and on whole words — substring
         // matching on short tokens surfaced unrelated facts (a query about
         // "companies" matched a fact whose object merely contained "s").
         const qTokens = contentTerms(q).filter((t) => t.length >= 3);
+        // The terms go into the QUERY, not just into the filter below. Facts
+        // come back capped and ordered by subject, so filtering afterwards
+        // asked the question of the alphabetically-first 200 facts only: on a
+        // 260-fact vault "where does Zname03 live" answered "no facts" while
+        // "where does Bname03 live" answered correctly. The word-boundary
+        // filter still runs; SQL only narrows to a superset of what it keeps.
+        const [passages, facts] = [
+          await search(ctx, q, { k: 5 }),
+          queryFacts(ctx.store, { ...factQuery, terms: qTokens }),
+        ];
         const hasTerm = (haystack: string, t: string) =>
           new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(haystack);
         const relevantFacts = facts
@@ -428,6 +436,7 @@ export function buildProgram(io: { out: (s: string) => void; err: (s: string) =>
     .option('--as-of <date>', 'what was true on this date')
     .option('--as-known-at <date>', 'what we BELIEVED on this date (record time)')
     .option('--history', 'include superseded facts')
+    .option('--limit <n>', `max facts (default ${DEFAULT_FACT_LIMIT})`, num('--limit', { int: true, min: 1 }))
     .option('--json', 'JSON output')
     .action(async (opts: {
       subject?: string;
@@ -435,18 +444,26 @@ export function buildProgram(io: { out: (s: string) => void; err: (s: string) =>
       asOf?: string;
       asKnownAt?: string;
       history?: boolean;
+      limit?: number;
       json?: boolean;
     }) => {
       await withCtx((ctx) => {
-        const rows = queryFacts(ctx.store, {
+        const page = queryFactsPage(ctx.store, {
           subject: opts.subject,
           predicate: opts.predicate,
           asOf: opts.asOf,
           asKnownAt: opts.asKnownAt,
           includeHistory: opts.history,
+          limit: opts.limit,
         });
+        const rows = page.facts;
         if (opts.json) {
           io.out(JSON.stringify(rows, null, 2));
+          if (page.total > rows.length) {
+            // to stderr: the JSON on stdout stays a plain array, and a
+            // truncated answer still says so where a person will see it.
+            io.err(`showing ${rows.length} of ${page.total} facts — raise --limit for the rest`);
+          }
           return;
         }
         if (!rows.length) {
@@ -461,6 +478,12 @@ export function buildProgram(io: { out: (s: string) => void; err: (s: string) =>
           // this come from" is the first thing anyone asks of a fact an
           // engine produced rather than a human typed.
           io.out(display(`    ${provenance(f)}`));
+        }
+        // A list that is a prefix of the answer has to say so. Without this,
+        // `lore facts` on a 260-fact vault printed 200 of them and stopped,
+        // and nothing on screen distinguished that from the whole store.
+        if (page.total > rows.length) {
+          io.out(`… showing ${rows.length} of ${page.total} facts — raise --limit for the rest`);
         }
       });
     });

@@ -11,6 +11,8 @@ import {
   assertFact,
   invalidateFact,
   queryFacts,
+  queryFactsPage,
+  DEFAULT_FACT_LIMIT,
 } from '../facts/model.js';
 import { dream, findStale } from '../dream/dream.js';
 import { capture, readNoteRaw } from '../capture.js';
@@ -321,7 +323,7 @@ export function createLoreMcpServer(ctx: LoreContext): McpServer {
     {
       title: 'Query facts',
       description:
-        'Query the bitemporal fact store. Default: currently-valid facts. asOf answers "what was true on DATE", asKnownAt answers "what did we know on DATE"; includeHistory shows the full supersession chain. Prefer this over lore_search for factual slots (status, location, role, preference).',
+        'Query the bitemporal fact store. Default: currently-valid facts. asOf answers "what was true on DATE", asKnownAt answers "what did we know on DATE"; includeHistory shows the full supersession chain. Prefer this over lore_search for factual slots (status, location, role, preference). Returns { facts } and, when the result is a sample, a `truncated` field with { shown, of, rest } — narrow by subject or raise limit before concluding a fact does not exist.',
       inputSchema: {
         subject: z.string().optional(),
         predicate: z.string().optional(),
@@ -333,9 +335,34 @@ export function createLoreMcpServer(ctx: LoreContext): McpServer {
             'ISO date: what was KNOWN on this date. Facts recorded later are excluded however far back their validity was backdated — use it to reconstruct what a past decision was based on. Combine with asOf for "what was true then, as far as we knew then".',
           ),
         includeHistory: z.boolean().optional(),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(5000)
+          .optional()
+          .describe(`max facts to return (default ${DEFAULT_FACT_LIMIT})`),
       },
     },
-    safe((q) => queryFacts(ctx.store, q)),
+    // Returns { facts, truncated? } rather than a bare array: the query is
+    // capped and ordered by subject, so a bare array was a prefix of the
+    // answer that looked like the whole of it — on a 260-fact vault the last
+    // 60 subjects simply did not exist as far as any caller could tell.
+    safe((q) => {
+      const page = queryFactsPage(ctx.store, q);
+      return {
+        facts: page.facts,
+        ...(page.total > page.facts.length
+          ? {
+              truncated: {
+                shown: page.facts.length,
+                of: page.total,
+                rest: 'lore_query_facts with a higher limit, or a subject',
+              },
+            }
+          : {}),
+      };
+    }),
   );
 
   server.registerTool(

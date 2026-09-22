@@ -72,7 +72,7 @@ describe('mcp server', () => {
   it('propose_facts surfaces prose candidates without asserting them', async () => {
     const before = parseText(
       await client.callTool({ name: 'lore_query_facts', arguments: { includeHistory: true } }),
-    ).length;
+    ).facts.length;
     const res = parseText(
       await client.callTool({ name: 'lore_propose_facts', arguments: { limit: 20 } }),
     );
@@ -80,7 +80,7 @@ describe('mcp server', () => {
     // proposing must not write anything
     const after = parseText(
       await client.callTool({ name: 'lore_query_facts', arguments: { includeHistory: true } }),
-    ).length;
+    ).facts.length;
     expect(after).toBe(before);
     // every candidate carries provenance back to its source
     for (const c of res.candidates) expect(c.source).toMatch(/\.md/);
@@ -166,8 +166,10 @@ describe('mcp server', () => {
         arguments: { subject: 'Ambuj', predicate: 'lives_in' },
       }),
     );
-    expect(current).toHaveLength(1);
-    expect(current[0].object).toBe('Hyderabad');
+    // { facts, truncated? }: a bare array could not say it was a sample.
+    expect(current.facts).toHaveLength(1);
+    expect(current.truncated).toBeUndefined();
+    expect(current.facts[0].object).toBe('Hyderabad');
 
     const past = parseText(
       await client.callTool({
@@ -175,7 +177,7 @@ describe('mcp server', () => {
         arguments: { subject: 'Ambuj', predicate: 'lives_in', asOf: '2022-05-05' },
       }),
     );
-    expect(past[0].object).toBe('Lucknow');
+    expect(past.facts[0].object).toBe('Lucknow');
 
     const agg = parseText(
       await client.callTool({

@@ -323,14 +323,56 @@ export interface FactQuery {
   asKnownAt?: string;
   /** Include superseded/closed facts (full history). */
   includeHistory?: boolean;
+  /**
+   * Content prefilter: keep only facts whose subject, predicate or object
+   * contains one of these (case-insensitive substring).
+   *
+   * It exists so a caller that filters by query words does the filtering
+   * BEFORE the limit rather than after. `lore ask` did it after, so a
+   * question about the 253rd subject alphabetically was answered from the
+   * first 200 facts and said there was no such fact.
+   */
+  terms?: string[];
+  /** Max rows (default 200). The total is reported by queryFactsPage. */
   limit?: number;
 }
 
 /**
+ * Rows one query returns unless the caller asks for more.
+ *
+ * Kept as a named constant because three surfaces quote it to the user.
+ */
+export const DEFAULT_FACT_LIMIT = 200;
+
+/**
  * Query facts. Default: currently-valid facts only. `asOf` answers
  * point-in-time questions; `includeHistory` returns the full chain.
+ *
+ * Capped — see queryFactsPage, which is the same query and also says how many
+ * facts matched. Prefer it anywhere the count is shown to a person or an
+ * agent; a bare list that might be a prefix of the answer is the bug this
+ * pair exists to make hard to write.
  */
 export function queryFacts(store: Store, q: FactQuery = {}): Fact[] {
+  return queryFactsPage(store, q).facts;
+}
+
+/**
+ * One page of facts, with the number that matched.
+ *
+ * The total is part of the return rather than something a caller may ask for,
+ * for the same reason aggregateFacts carries totalGroups: the bug was a
+ * caller not asking. `queryFacts` capped at 200 in alphabetical subject order
+ * and said nothing, so on a 260-fact vault `lore ask "where does Zname03
+ * live"` answered with no facts while the identical question about Bname03
+ * answered correctly — and lore_context_pack had just told the agent to read
+ * a missing item as "not in this sample", never "not in the vault", before
+ * handing it the tool with no way to tell the two apart.
+ */
+export function queryFactsPage(
+  store: Store,
+  q: FactQuery = {},
+): { facts: Fact[]; total: number; limit: number } {
   checkDate('asOf', q.asOf);
   checkDate('asKnownAt', q.asKnownAt);
   const clauses: string[] = [];
@@ -360,15 +402,36 @@ export function queryFacts(store: Store, q: FactQuery = {}): Fact[] {
     clauses.push(`(superseded_at IS NULL OR superseded_at > ?)`);
     params.push(`${q.asKnownAt}~`);
   }
+  if (q.terms?.length) {
+    const ors: string[] = [];
+    for (const t of q.terms) {
+      const needle = t.toLowerCase();
+      ors.push(
+        `(instr(lower(subject), ?) > 0 OR instr(lower(predicate), ?) > 0 OR instr(lower(object), ?) > 0)`,
+      );
+      params.push(needle, needle, needle);
+    }
+    clauses.push(`(${ors.join(' OR ')})`);
+  }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const limit = q.limit ?? DEFAULT_FACT_LIMIT;
   const rows = store.db
     .prepare(
       `SELECT * FROM facts ${where}
        ORDER BY subject, predicate, COALESCE(valid_from, recorded_at) DESC
        LIMIT ?`,
     )
-    .all(...params, q.limit ?? 200) as Record<string, unknown>[];
-  return rows.map(rowToFact);
+    .all(...params, limit) as Record<string, unknown>[];
+  // A short page is the whole answer: same WHERE, no offset, so fewer rows
+  // than the limit means there is nothing past them. Skipping the COUNT there
+  // keeps the ordinary small-vault query at one statement, which is what it
+  // was before; only a query that actually hit the cap pays for the total.
+  const total =
+    rows.length < limit
+      ? rows.length
+      : (store.db.prepare(`SELECT COUNT(*) c FROM facts ${where}`).get(...params) as { c: number })
+          .c;
+  return { facts: rows.map(rowToFact), total, limit };
 }
 
 export interface AggregateQuery {

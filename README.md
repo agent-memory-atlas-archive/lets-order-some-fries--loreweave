@@ -202,7 +202,7 @@ is a deterministic diff. Full setup in [Agent memory](#use-it-as-agent-memory-mc
 | `lore index [--full] [--no-nlp] [--rebuild-similar]` | incremental sync of vault → index |
 | `lore search <q> [-k] [--since] [--until] [--tag] [--folder] [--json]` | hybrid retrieval with provenance |
 | `lore ask <q>` | extractive answer: current facts + top passages (no LLM needed) |
-| `lore facts [--subject] [--predicate] [--as-of] [--as-known-at] [--history]` | query the fact store |
+| `lore facts [--subject] [--predicate] [--as-of] [--as-known-at] [--history] [--limit]` | query the fact store (200 rows unless `--limit` says otherwise; a capped list says how many it left out) |
 | `lore timeline <entity> [--since] [--until]` | chronological history: fact changes merged with dated mentions |
 | `lore resume [--since]` | what changed since the last resume: notes, facts, supersessions |
 | `lore review [--threshold] [--limit]` | important-but-fading knowledge to revisit or archive |
