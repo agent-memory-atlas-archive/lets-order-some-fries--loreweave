@@ -358,7 +358,24 @@ export function openStore(dbPath: string, opts: OpenStoreOptions = {}): Store {
   const stampedParser = db.prepare(`SELECT value FROM meta WHERE key='parser_version'`).get() as
     | { value: string }
     | undefined;
-  if (Number(stampedParser?.value ?? 0) !== PARSER_VERSION) {
+  //
+  // Strictly BELOW, never `!==`. The schema stamp took the same guard in
+  // 0.37.x for the reason written beside it — re-indexing a large vault is
+  // expensive, so discarding someone's index because they ran an old binary
+  // once is the wrong trade — and it applies here with more force, because
+  // this branch does not refuse, it silently rewrites the stamp DOWN. Two
+  // builds against one vault is the README's own setup (`npx -y loreweave`
+  // for the MCP server resolves to latest; `npm i -g loreweave` for the CLI
+  // stays where the user left it), so `!==` made each build undo the other on
+  // every open and turned every subsequent index into a full reparse in both.
+  // A newer parser's output is at least as good as this build's; there is
+  // nothing to gain by redoing it, and leaving the stamp alone is what stops
+  // the alternation.
+  //
+  // A stamp that is not a number is not a claim to be newer — `NaN < n` is
+  // false, which would strand it unhealed forever — so it counts as unparsed.
+  const stampedParserNum = Number(stampedParser?.value ?? 0);
+  if (!Number.isFinite(stampedParserNum) || stampedParserNum < PARSER_VERSION) {
     try {
       db.transaction(() => {
         db.exec(`UPDATE notes SET hash = '', size = -1`);

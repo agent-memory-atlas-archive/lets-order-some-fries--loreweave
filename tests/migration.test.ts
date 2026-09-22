@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { MIGRATIONS } from '../src/store/schema.js';
+import { dirname, join } from 'node:path';
+import { MIGRATIONS, PARSER_VERSION } from '../src/store/schema.js';
 import { openStore } from '../src/store/db.js';
 import { indexVault } from '../src/index/indexer.js';
 import { search } from '../src/retrieve/search.js';
@@ -118,11 +118,18 @@ describe('schema upgrades', () => {
 /**
  * meta.schema_version is the only stamp with no guard in either direction.
  *
- * Its neighbours self-heal: parser_version and note_gate_version are both
- * compared with !==, so an older binary re-runs its own work and a later
- * upgrade re-runs the newer work. schema_version is compared with `<` by the
- * migration loop alone, so anything the loop cannot interpret is absorbed
- * silently instead of refused.
+ * Its neighbours were both described as self-healing because they compare
+ * with !==, so an older binary re-runs its own work and a later upgrade
+ * re-runs the newer work. That was wrong for parser_version, whose branch
+ * rewrites the stamp DOWN and wipes every fingerprint on the way: two builds
+ * sharing one vault undid each other on every open. It now compares with `<`
+ * (see 'parser stamp guards' below). note_gate_version still compares with
+ * ===, and does alternate the same way, but its pass is a walk of the paths
+ * already in the store with no fingerprint wipe and no reparse, so the cost
+ * is a different order of magnitude and nobody has measured it hurting.
+ * schema_version is compared with `<` by the migration loop alone, so
+ * anything the loop cannot interpret is absorbed silently instead of
+ * refused.
  */
 describe('schema stamp guards', () => {
   async function stamp(value: string): Promise<string> {
@@ -190,5 +197,79 @@ describe('schema stamp guards', () => {
     const { c } = store.db.prepare(`SELECT total_changes() AS c`).get() as { c: number };
     expect(c).toBe(0);
     store.close();
+  });
+});
+
+/**
+ * The parser stamp has to hold in BOTH directions.
+ *
+ * Backwards it forces the reparse an upgrade needs (mtime-survives-stamp.test.ts
+ * pins that half). Forwards it must do nothing: two installed builds on one
+ * vault is the README's own setup — `npx -y loreweave` for the MCP server
+ * always resolves to latest, `npm i -g loreweave` for the CLI stays where the
+ * user left it — so an older binary that restamps DOWN makes every index a
+ * full reparse, forever, in both builds.
+ */
+describe('parser stamp guards', () => {
+  async function indexedVault(): Promise<string> {
+    const root = await makeVaultAtSchema(MIGRATIONS.length);
+    const dbFile = join(root, 'index.db');
+    const store = openStore(dbFile);
+    await indexVault(store, root);
+    store.close();
+    return dbFile;
+  }
+
+  function stampParser(dbFile: string, value: number): void {
+    const raw = new Database(dbFile);
+    raw
+      .prepare(`INSERT INTO meta(key,value) VALUES('parser_version',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+      .run(String(value));
+    raw.close();
+  }
+
+  it('leaves an index parsed by a newer build alone instead of reverting it', async () => {
+    const dbFile = await indexedVault();
+    stampParser(dbFile, PARSER_VERSION + 1);
+
+    const store = openStore(dbFile);
+    const stamp = store.db.prepare(`SELECT value FROM meta WHERE key='parser_version'`).get() as {
+      value: string;
+    };
+    // the stamp is not dragged back down to this build's number …
+    expect(Number(stamp.value)).toBe(PARSER_VERSION + 1);
+    // … and the newer parser's work is not thrown away
+    const rows = store.db.prepare(`SELECT path, hash, size FROM notes ORDER BY path`).all() as {
+      path: string;
+      hash: string;
+      size: number;
+    }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.hash, r.path).not.toBe('');
+      expect(r.size, r.path).toBeGreaterThan(0);
+    }
+    store.close();
+  });
+
+  it('does not turn every index into a full reparse when two builds share a vault', async () => {
+    // Measured on a 2 000-note vault before the guard: a steady-state
+    // incremental was 35 ms, and one read by the other binary made the next
+    // index `+0 ~2000 -0 =0` at 2 001 ms — 57x, on every save, in both builds.
+    const dbFile = await indexedVault();
+    const root = dirname(dbFile);
+    stampParser(dbFile, PARSER_VERSION + 1);
+
+    const store = openStore(dbFile);
+    const report = await indexVault(store, root);
+    expect(report.updated).toBe(0);
+    expect(report.unchanged).toBeGreaterThan(0);
+    store.close();
+
+    // and the stamp the newer build left is still there for it to find
+    const after = openStore(dbFile);
+    expect(Number(after.getMeta('parser_version'))).toBe(PARSER_VERSION + 1);
+    after.close();
   });
 });
