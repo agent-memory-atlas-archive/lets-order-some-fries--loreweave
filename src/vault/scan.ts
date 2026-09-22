@@ -72,8 +72,18 @@ export function whyNotNote(rel: string, opts: NoteCheck = {}): string | null {
   if (opts.root !== undefined) {
     // realpath follows every link in the chain; whatever it lands on is what
     // would actually be read, so that is what has to be a note.
-    const real = realpathSync(join(opts.root, rel));
-    if (!statSync(real).isFile()) return 'not a regular file';
+    // A path that cannot be resolved is not a note — it is not an error. The
+    // index outlives the files it describes: reconcileNoteGate walks the paths
+    // already stored, so one note deleted or renamed since the last index threw
+    // ENOENT out of every retrieval, and over MCP that surfaced as a raw errno
+    // carrying the vault's absolute path.
+    let real: string;
+    try {
+      real = realpathSync(join(opts.root, rel));
+      if (!statSync(real).isFile()) return 'not a regular file';
+    } catch {
+      return 'no longer exists in the vault';
+    }
     if (!isNoteBasename(basename(real))) return `resolves to ${basename(real)}, which is not a note`;
   }
   return null;

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.37.2 — 2026-09-22
+
+- **A note deleted since the last index no longer breaks every search.** 0.37.1's
+  repair walks the paths already in the index and asks whether each is still a
+  note; that question resolved the real file, which throws `ENOENT` for a path
+  that is gone. Since the walk runs from `ensureIndexed`, one renamed or deleted
+  note made `lore search` — and every MCP tool behind it — die with a raw errno
+  naming an absolute path. The upgrade itself is when it would have fired, because
+  that is when the walk always runs. A path that cannot be resolved is now simply
+  not a note, and its stale row is dropped like any other. **0.37.1 was tagged but
+  never published; use this instead.**
+
 ## 0.37.1 — 2026-09-15
 
 - **An index built before 0.37.0 is repaired on the next open.** 0.37.0 narrowed

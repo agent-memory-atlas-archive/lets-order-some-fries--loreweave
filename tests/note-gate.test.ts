@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, symlink, readdir, stat } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capture, readNoteRaw } from '../src/capture.js';
-import { scanVault } from '../src/vault/scan.js';
+import { scanVault, whyNotNote } from '../src/vault/scan.js';
 import { indexVault } from '../src/index/indexer.js';
 import { openContext, ensureIndexed } from '../src/context.js';
 import { parseNote } from '../src/vault/parse.js';
@@ -278,6 +278,28 @@ describe('an index built by a version with the old, looser gate', () => {
     expect(notes).not.toContain('leak.md');
     expect(notes).toContain('real.md'); // the genuine note is untouched
     ctx.close();
+  });
+});
+
+describe('a note that has been deleted since the last index', () => {
+  it('is reported as not-a-note rather than throwing, so retrieval survives it', async () => {
+    // whyNotNote resolves the real target with realpathSync, which throws ENOENT
+    // for a path that is gone. reconcileNoteGate walks every path already in the
+    // index, so ONE note deleted or renamed since the last `lore index` made the
+    // reconcile throw — and because that reconcile runs from ensureIndexed, every
+    // search, and every MCP tool behind it, died with a raw ENOENT naming an
+    // absolute path. That is the upgrade path for 0.37.1, where the stamp is
+    // absent and the reconcile always runs.
+    const base = await mkdtemp(join(tmpdir(), 'lw-gone-'));
+    const root = join(base, 'vault');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, 'kept.md'), '# Kept\n\nherons wade here.\n');
+
+    // a path the index still knows about, whose file is gone
+    expect(() => whyNotNote('vanished.md', { root })).not.toThrow();
+    expect(whyNotNote('vanished.md', { root })).toMatch(/exist/i);
+    // the note that is still there is unaffected
+    expect(whyNotNote('kept.md', { root })).toBeNull();
   });
 });
 
