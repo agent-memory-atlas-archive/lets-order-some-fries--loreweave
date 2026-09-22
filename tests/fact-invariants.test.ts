@@ -143,6 +143,7 @@ describe('markdown is the source of truth', () => {
       store.db
         .prepare(
           `SELECT subject,predicate,object,valid_from,valid_until,user_valid_until,
+                  note_path,block_anchor,
                   superseded_by IS NOT NULL AS superseded
            FROM facts ORDER BY subject,predicate,valid_from,object,valid_until`,
         )

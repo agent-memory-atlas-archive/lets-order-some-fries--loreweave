@@ -20,6 +20,19 @@
   rebuild is impossible, so the CLI prints the caveat `stats` already used to stderr
   (stdout is untouched, so nothing parsing `lore search` moves), and `lore_context_pack`
   carries an additive `stats.indexIncomplete: true`. No other field or result shape changes.
+- **A fact's provenance no longer changes when the index is rebuilt.** `lore assert` wrote
+  the fact row before indexing the journal line it had just appended, so there was no block
+  to point at and `block_anchor` went in NULL; `rebuildFactsFromNotes` replays that same line
+  out of the indexed note and sets the anchor it finds. Any replay — deleting `.lore`, or
+  simply re-indexing after an edit to an unrelated note — therefore moved every already-asserted
+  fact's citation from `lore/journal/<date>.md` to `lore/journal/<date>.md#@0`, contradicting the
+  README's "delete the index and rebuild it identically". The named test could not catch it: its
+  projection selected seven columns and omitted the two provenance ones, so 120 generated
+  histories passed over the only columns that diverged. `assert` now stamps the anchor from the
+  journal note straight after indexing it, which is the same anchor the replay derives — on a
+  journal split by headings both paths read `#<day>/Afternoon@0`, not a flattened path.
+  **Visible change:** `lore facts` and MCP `lore_query_facts` now show the `#anchor` suffix
+  immediately after an assert, where before they showed the bare path until the next rebuild.
 
 ## 0.37.2 — 2026-09-22
 

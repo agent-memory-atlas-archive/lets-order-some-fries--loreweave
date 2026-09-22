@@ -89,6 +89,35 @@ function appendJournalLine(root: string, line: string): string {
  *  every downstream pass (journal lines, retrieval, dream) pathological. */
 export const MAX_FACT_FIELD = 2000;
 
+/**
+ * Stamp a fact row with the anchor of the journal block its line landed in.
+ *
+ * assertFact inserts the row before the journal note is indexed, so no block
+ * exists to point at yet and block_anchor went in NULL; rebuildFactsFromNotes
+ * replays the same line out of the indexed note and sets the anchor it finds
+ * there. The two write paths disagreed, so a fact's cited source changed the
+ * first time anything triggered a replay — which is any re-index that touches
+ * any note, not just deleting .lore. Running this AFTER indexNoteFile, once the
+ * block rows exist, lands the live path on the anchor the replay would derive.
+ *
+ * Matching on the full rendered line is exact, and a miss leaves NULL — which
+ * is precisely today's behaviour, not a wrong anchor.
+ */
+function stampBlockAnchor(
+  db: Store['db'],
+  id: number,
+  journalPath: string,
+  line: string,
+): void {
+  db.prepare(
+    `UPDATE facts SET block_anchor = (
+       SELECT anchor FROM blocks
+       WHERE note_path = ? AND instr(text, ?) > 0
+       ORDER BY ord DESC LIMIT 1)
+     WHERE id = ? AND block_anchor IS NULL`,
+  ).run(journalPath, line, id);
+}
+
 export function assertFact(ctx: LoreContext, input: AssertFactInput): AssertFactResult {
   if (!input.subject.trim() || !input.predicate.trim() || !input.object.trim()) {
     throw new Error('subject, predicate, and object are required');
@@ -126,22 +155,22 @@ export function assertFact(ctx: LoreContext, input: AssertFactInput): AssertFact
       `validUntil ${input.validUntil} is before validFrom ${validFrom}`,
     );
   }
-  const journalPath = appendJournalLine(
-    ctx.root,
-    renderFactLine({
-      kind: 'fact',
-      subject: input.subject.trim(),
-      predicate: input.predicate.trim(),
-      object: input.object.trim(),
-      attrs: {
-        valid_from: validFrom,
-        ...(input.validUntil ? { valid_until: input.validUntil } : {}),
-        recorded_at: recordedAt,
-        confidence: String(conf),
-        source: sourceType,
-      },
-    }),
-  );
+  // Kept in a const because the same text is how the fact is found again in
+  // the indexed note, to stamp the block anchor the replay would later derive.
+  const journalLine = renderFactLine({
+    kind: 'fact',
+    subject: input.subject.trim(),
+    predicate: input.predicate.trim(),
+    object: input.object.trim(),
+    attrs: {
+      valid_from: validFrom,
+      ...(input.validUntil ? { valid_until: input.validUntil } : {}),
+      recorded_at: recordedAt,
+      confidence: String(conf),
+      source: sourceType,
+    },
+  });
+  const journalPath = appendJournalLine(ctx.root, journalLine);
 
   const db = ctx.store.db;
   const before = db
@@ -177,6 +206,9 @@ export function assertFact(ctx: LoreContext, input: AssertFactInput): AssertFact
     // The journal line was still appended above — the journal is a log of what
     // was said — so the note still needs its self-index.
     indexNoteFile(ctx.store, ctx.root, journalPath, { nlp: ctx.config.nlp });
+    // The re-assertion appended a line to (possibly) a new block, and the kept
+    // row may still carry the NULL from before this note was ever indexed.
+    stampBlockAnchor(db, identical.id, journalPath, journalLine);
     ctx.invalidateGraph();
     const kept = rowToFact(db.prepare(`SELECT * FROM facts WHERE id=?`).get(identical.id) as any);
     return { fact: kept, superseded: [], journalPath };
@@ -207,9 +239,11 @@ export function assertFact(ctx: LoreContext, input: AssertFactInput): AssertFact
   // The journal line just appended becomes searchable immediately, matching
   // capture. The fact itself was queryable already; the NOTE was not.
   indexNoteFile(ctx.store, ctx.root, journalPath, { nlp: ctx.config.nlp });
-  ctx.invalidateGraph();
 
   const id = Number(info.lastInsertRowid);
+  stampBlockAnchor(db, id, journalPath, journalLine);
+  ctx.invalidateGraph();
+
   const fact = rowToFact(db.prepare(`SELECT * FROM facts WHERE id=?`).get(id) as any);
   // Records this assertion CLOSED, minus the ones it merely re-confirmed. The
   // chain closes every predecessor so a slot keeps exactly one current value,
