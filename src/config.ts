@@ -171,6 +171,23 @@ export const ConfigSchema = z
     nlp: z.boolean().default(true),
     ignore: z.array(z.string()).default([]),
     /**
+     * Follow a symlink whose real target is outside the vault, when indexing
+     * and when reading a note.
+     *
+     * Off by default. A symlink inside a vault is not necessarily the vault
+     * owner's idea: vaults are shared over git and Obsidian Sync and written
+     * into by other agents, and a note named `notes.md` pointing at a file
+     * elsewhere, or a folder linked to `~`, turns "index my vault" into
+     * "index that". The write path has refused to leave the real vault
+     * through a symlink since it was hardened; this is the same boundary on
+     * the read path, and SECURITY.md calls reading outside the vault the
+     * highest-priority class of bug in this project.
+     *
+     * Turn it on if you keep part of your vault elsewhere and link it in —
+     * this file is yours, and vault content cannot write it.
+     */
+    followExternalSymlinks: z.boolean().default(false),
+    /**
      * Rows of retrieval history to keep. Everything else in the index is
      * derivable from the markdown and can be rebuilt by deleting `.lore`; this
      * table is not, and nothing pruned it. Measured: five rows per search, one

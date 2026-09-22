@@ -119,7 +119,12 @@ export function reconcileNoteGate(ctx: LoreContext): number {
   let dropped = 0;
   try {
     for (const p of paths) {
-      if (whyNotNote(p, { ignore: ctx.config.ignore, root: ctx.root }) === null) continue;
+      const check = {
+        ignore: ctx.config.ignore,
+        root: ctx.root,
+        allowExternal: ctx.config.followExternalSymlinks,
+      };
+      if (whyNotNote(p, check) === null) continue;
       ctx.store.deleteNote(p);
       dropped++;
     }
@@ -173,7 +178,9 @@ export async function ensureIndexed(
     }
     return false;
   }
-  const files = await scanVault(ctx.root, ctx.config.ignore);
+  const files = await scanVault(ctx.root, ctx.config.ignore, {
+    followExternal: ctx.config.followExternalSymlinks,
+  });
   if (files.length === 0) return false; // genuinely empty vault: "no results" is true
   onFirstIndex?.(files.length);
   await indexVault(ctx.store, ctx.root, configIndexOptions(ctx.config));

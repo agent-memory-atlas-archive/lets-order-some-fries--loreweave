@@ -39,13 +39,17 @@ describe('vault containment', () => {
     expect(() => readNoteRaw(vault, '../outside/secret.md')).toThrow(/escapes the vault/);
   });
 
-  it('still reads notes reached through a symlinked folder', async () => {
-    // scanVault follows symlinked folders deliberately — one used to be
-    // silently invisible, which was its own bug — so those notes are indexed
-    // and returned by search. Refusing to read them would leave search
-    // returning results that cannot be opened.
+  it('refuses a note whose real file is outside the vault, unless the owner opted in', async () => {
+    // The read side used to allow this, because the scanner indexed those
+    // notes and a search result nothing can open is worse than none. The
+    // scanner stopped following a link out of the vault, so that rationale is
+    // gone and the read follows it out again — with .lore/config.json, which
+    // vault content cannot write, as the one way to say otherwise.
     const { vault } = await vaultWithSymlink();
-    expect(readNoteRaw(vault, 'linked/secret.md')).toContain('Outside the vault');
+    expect(() => readNoteRaw(vault, 'linked/secret.md')).toThrow(/outside the vault/);
+    expect(readNoteRaw(vault, 'linked/secret.md', [], { allowExternal: true })).toContain(
+      'Outside the vault',
+    );
   });
 
   it('refuses to read anything that is not a note, even through a symlink', async () => {

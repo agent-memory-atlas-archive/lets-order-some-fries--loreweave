@@ -102,9 +102,12 @@ export function capture(ctx: LoreContext, text: string, to = 'lore/inbox.md'): s
  * Exactly the files the vault scanner would index are readable — the one
  * definition lives in vault/scan.ts (`whyNotNote`), and this is a caller of
  * it, not a second copy. Reading a note reached through a symlinked folder is
- * deliberate: scanVault follows those folders, so their notes are indexed and
- * returned by search, and refusing to open them would leave search returning
- * results that cannot be read. That rationale only ever covered NOTES. The
+ * deliberate, but only while that folder's real location is inside the vault:
+ * the scanner no longer follows a link that leaves it, so refusing the read
+ * strands no search result. That was the whole of the old exemption's
+ * rationale, and it now points the other way. A vault owner who means it can
+ * set `followExternalSymlinks` in .lore/config.json — a file vault content
+ * cannot write. The rest of the gate covered NOTES only. The
  * gate before this one checked the basename of the path it was GIVEN, which
  * let through two things the scanner never indexes: a note inside a hidden
  * or ignored directory (`.private/diary.md`), and a symlink named `x.md`
@@ -114,11 +117,16 @@ export function capture(ctx: LoreContext, text: string, to = 'lore/inbox.md'): s
  * `ignore` is the vault's config.ignore, so a folder the scanner skips on
  * the user's instruction is skipped here too.
  */
-export function readNoteRaw(root: string, rel: string, ignore: string[] = []): string {
+export function readNoteRaw(
+  root: string,
+  rel: string,
+  ignore: string[] = [],
+  opts: { allowExternal?: boolean } = {},
+): string {
   // Containment first, so a traversal attempt is still reported as one rather
   // than as a file-type complaint.
   const abs = safeVaultPath(root, rel);
-  const reason = whyNotNote(rel, { ignore, root });
+  const reason = whyNotNote(rel, { ignore, root, allowExternal: opts.allowExternal });
   if (reason !== null) {
     throw new Error(`not a readable note (${reason}): ${rel}`);
   }

@@ -149,11 +149,17 @@ describe('what counts as a note', () => {
 
     const paths = (await scanVault(root)).map((f) => f.path);
     expect(paths).not.toContain('leak.md');
-    // The deliberate behaviour stays: a symlink to a genuine note, and a
-    // symlinked folder of notes, are still indexed and still readable.
-    expect(paths).toContain('linked-note.md');
-    expect(paths).toContain('linked/shared.md');
+    // A link whose target is a genuine note is refused too, now that the
+    // boundary is the real vault on the read side as well: the vault owner
+    // opts into those in .lore/config.json, and the default is the boundary
+    // SECURITY.md describes.
+    expect(paths).not.toContain('linked-note.md');
+    expect(paths).not.toContain('linked/shared.md');
     expect(paths).toContain('a.md');
+    const optedIn = (await scanVault(root, [], { followExternal: true })).map((f) => f.path);
+    expect(optedIn).toContain('linked-note.md');
+    expect(optedIn).toContain('linked/shared.md');
+    expect(optedIn).not.toContain('leak.md');
 
     const store = openStore(':memory:');
     await indexVault(store, root);
@@ -165,8 +171,11 @@ describe('what counts as a note', () => {
     store.close();
 
     expect(() => readNoteRaw(root, 'leak.md')).toThrow(/not a readable note/);
-    expect(readNoteRaw(root, 'linked-note.md')).toContain('genuine note');
-    expect(readNoteRaw(root, 'linked/shared.md')).toContain('folder linked in');
+    expect(() => readNoteRaw(root, 'linked-note.md')).toThrow(/outside the vault/);
+    expect(() => readNoteRaw(root, 'linked/shared.md')).toThrow(/outside the vault/);
+    expect(readNoteRaw(root, 'linked-note.md', [], { allowExternal: true })).toContain(
+      'genuine note',
+    );
   });
 
   it('scanVault and readNoteRaw agree on every file in a mixed tree', async () => {
@@ -233,8 +242,6 @@ describe('what counts as a note', () => {
     // and the set is the one a vault owner would expect
     expect(scanned).toEqual([
       'a.md',
-      'linked-note.md',
-      'linked/shared.md',
       'lore/inbox.md',
       'lore/journal/2026-01-01.md',
       'sub/C.MD',

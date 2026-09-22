@@ -1,6 +1,6 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { realpathSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import type { VaultFile } from '../types.js';
 
 const DEFAULT_IGNORES = new Set(['node_modules', '.git', '.obsidian', '.lore', '.trash']);
@@ -33,6 +33,37 @@ export interface NoteCheck {
    * yet cannot.
    */
   root?: string;
+  /**
+   * Allow a note whose real file lives outside the vault (config
+   * `followExternalSymlinks`). Off by default: see the boundary note below.
+   */
+  allowExternal?: boolean;
+}
+
+/**
+ * The real vault root, cached per root string.
+ *
+ * Every note check inside one scan resolves against it, and the vault root
+ * does not move under a running process. Without the cache this is one extra
+ * realpath syscall per file on every scan.
+ */
+const realRoots = new Map<string, string>();
+function realVaultRoot(root: string): string {
+  let r = realRoots.get(root);
+  if (r === undefined) {
+    try {
+      r = realpathSync(root);
+    } catch {
+      r = resolve(root);
+    }
+    realRoots.set(root, r);
+  }
+  return r;
+}
+
+/** Containment on real paths — both sides already resolved. */
+export function insideRealRoot(real: string, rootReal: string): boolean {
+  return real === rootReal || real.startsWith(rootReal + sep);
 }
 
 /**
@@ -85,6 +116,18 @@ export function whyNotNote(rel: string, opts: NoteCheck = {}): string | null {
       return 'no longer exists in the vault';
     }
     if (!isNoteBasename(basename(real))) return `resolves to ${basename(real)}, which is not a note`;
+    // The boundary is the REAL vault, on the read side as well as the write
+    // side. A symlink named like a note, or a whole folder linked in, is a
+    // path someone who can write one file into the vault chooses for the
+    // indexer to read, search to return and lore_read_note to serve in full —
+    // and SECURITY.md's first-priority class is "the CLI or MCP server
+    // reading files outside the vault it was pointed at". Reading these was
+    // allowed because the scanner indexed them, and refusing the read alone
+    // would have left search returning results nothing could open; the
+    // scanner no longer yields them, so the two agree again.
+    if (opts.allowExternal !== true && !insideRealRoot(real, realVaultRoot(opts.root))) {
+      return 'resolves outside the vault';
+    }
   }
   return null;
 }
@@ -101,10 +144,14 @@ export function isNotePath(rel: string, opts: NoteCheck = {}): boolean {
 export async function scanVault(
   root: string,
   ignore: string[] = [],
-  opts: { followSymlinks?: boolean } = {},
+  opts: { followSymlinks?: boolean; followExternal?: boolean } = {},
 ): Promise<VaultFile[]> {
   const ignoreSet = new Set([...DEFAULT_IGNORES, ...ignore]);
   const follow = opts.followSymlinks !== false;
+  // A link that stays inside the vault is followed as it always was; one that
+  // leaves it is not a note unless the vault's own config says so.
+  const external = opts.followExternal === true;
+  const rootReal = realVaultRoot(root);
   const out: VaultFile[] = [];
   // Real paths already walked. A symlinked directory pointing at an ancestor
   // is an infinite tree; following links without this would never terminate.
@@ -146,6 +193,13 @@ export async function scanVault(
       }
       if (isDir) {
         if (name.startsWith('.') || ignoreSet.has(name)) continue;
+        if (isLink && !external) {
+          try {
+            if (!insideRealRoot(await realpath(join(dir, name)), rootReal)) continue;
+          } catch {
+            continue;
+          }
+        }
         await walk(join(dir, name), rel ? `${rel}/${name}` : name);
       } else if (isFile) {
         const relPath = rel ? `${rel}/${name}` : name;
@@ -156,7 +210,9 @@ export async function scanVault(
         // thing and be another, so only there is the target resolved.
         if (isLink) {
           try {
-            if (!isNoteBasename(basename(await realpath(abs)))) continue;
+            const real = await realpath(abs);
+            if (!isNoteBasename(basename(real))) continue;
+            if (!external && !insideRealRoot(real, rootReal)) continue;
           } catch {
             continue;
           }

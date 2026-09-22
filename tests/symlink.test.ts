@@ -13,17 +13,24 @@ async function vault(): Promise<string> {
 }
 
 describe('symlinks', () => {
-  it('indexes notes inside a symlinked folder', async () => {
+  it('indexes notes inside a symlinked folder the vault owner opted into', async () => {
     // A symlink reports as neither file nor directory, so these notes used to
-    // be silently invisible with nothing to explain why.
+    // be silently invisible with nothing to explain why. Following one out of
+    // the vault is now the vault owner's decision, taken in .lore/config.json
+    // rather than by whoever wrote a link into the vault — but once taken,
+    // the folder is walked exactly as it was.
     const root = await vault();
     const shared = await mkdtemp(join(tmpdir(), 'lw-shared-'));
     await writeFile(join(shared, 'shared.md'), '# Shared\n');
     await symlink(shared, join(root, 'linked'));
 
-    const files = (await scanVault(root)).map((f) => f.path).sort();
-    expect(files).toContain('linked/shared.md');
-    expect(files).toContain('a.md');
+    const off = (await scanVault(root)).map((f) => f.path).sort();
+    expect(off).not.toContain('linked/shared.md');
+    expect(off).toContain('a.md');
+
+    const on = (await scanVault(root, [], { followExternal: true })).map((f) => f.path).sort();
+    expect(on).toContain('linked/shared.md');
+    expect(on).toContain('a.md');
   });
 
   it('terminates on a symlink cycle', async () => {
@@ -59,7 +66,9 @@ describe('symlinks', () => {
     await writeFile(join(shared, 'shared.md'), '# Shared\n');
     await symlink(shared, join(root, 'linked'));
 
-    const files = (await scanVault(root, [], { followSymlinks: false })).map((f) => f.path);
+    const files = (await scanVault(root, [], { followSymlinks: false, followExternal: true })).map(
+      (f) => f.path,
+    );
     expect(files).not.toContain('linked/shared.md');
     expect(files).toContain('a.md');
   });

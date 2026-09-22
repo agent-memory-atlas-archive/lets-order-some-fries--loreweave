@@ -20,6 +20,8 @@ export interface IndexOptions {
   /** Disable wink-nlp proper-noun extraction (faster; links/tags only). */
   nlp?: boolean;
   ignore?: string[];
+  /** Index notes whose real file is outside the vault (config followExternalSymlinks). */
+  followExternalSymlinks?: boolean;
 }
 
 /**
@@ -34,7 +36,12 @@ export interface IndexOptions {
  * this first; put the command's own overrides after it.
  */
 export function configIndexOptions(config: LoreConfig): IndexOptions {
-  return { factExtract: config.facts.extract, nlp: config.nlp, ignore: config.ignore };
+  return {
+    factExtract: config.facts.extract,
+    nlp: config.nlp,
+    ignore: config.ignore,
+    followExternalSymlinks: config.followExternalSymlinks,
+  };
 }
 
 /** Replace all entity mentions derived from one note. */
@@ -220,7 +227,9 @@ async function indexVaultOnce(
 ): Promise<IndexReport> {
   const started = Date.now();
   const useNlp = opts.nlp !== false;
-  const files = await scanVault(root, opts.ignore ?? []);
+  const files = await scanVault(root, opts.ignore ?? [], {
+    followExternal: opts.followExternalSymlinks,
+  });
 
   // An index is many transactions, so a crash mid-run leaves derived state
   // (facts, mentions, importance) half-built with no way to notice: a later

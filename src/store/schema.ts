@@ -30,8 +30,13 @@ export const PARSER_VERSION = 3;
  * would now refuse to create, and the incremental indexer never revisits them.
  * For the symlink case those rows hold the contents of whatever the link
  * pointed at. Bump this whenever whyNotNote's answer changes for any path.
+ *
+ * v2: a note whose real file lives outside the vault is no longer a note
+ * unless config.followExternalSymlinks says so, so every index built before
+ * that carries rows holding out-of-vault file contents. Dropping those rows
+ * on the first read after the upgrade is what this bump is for.
  */
-export const NOTE_GATE_VERSION = 1;
+export const NOTE_GATE_VERSION = 2;
 
 export const MIGRATIONS: string[] = [
   // v1 — initial schema

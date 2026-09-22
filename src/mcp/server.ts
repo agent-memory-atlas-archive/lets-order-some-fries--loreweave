@@ -218,10 +218,14 @@ export function createLoreMcpServer(ctx: LoreContext): McpServer {
     {
       title: 'Read a note',
       description:
-        'Read the raw markdown of a note by vault-relative path (as returned in search results). After reading a note that answered the question, call lore_mark_used to reinforce it.',
+        'Read the raw markdown of a note by vault-relative path (as returned in search results). Never reads outside the vault — a path that escapes it, including through a symlink whose target lives elsewhere, is refused, and such a file is not indexed or searchable either. After reading a note that answered the question, call lore_mark_used to reinforce it.',
       inputSchema: { path: z.string().min(1).max(1024).describe('vault-relative path, e.g. projects/x.md') },
     },
-    safe(({ path }) => readNoteRaw(ctx.root, path, ctx.config.ignore)),
+    safe(({ path }) =>
+      readNoteRaw(ctx.root, path, ctx.config.ignore, {
+        allowExternal: ctx.config.followExternalSymlinks,
+      }),
+    ),
   );
 
   server.registerTool(
