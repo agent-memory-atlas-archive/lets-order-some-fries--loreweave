@@ -65,7 +65,23 @@ export interface LoreGraph {
  *  COOCCUR  entity ↔ entity       (0.4, same-block co-occurrence, capped per block)
  *  SIMILAR  block ↔ block         (0.8 × cosine, from persisted edges table)
  */
-export function buildGraph(store: Store, config: LoreConfig): LoreGraph {
+/**
+ * Options nothing in the product passes.
+ *
+ * `nodeLimit` exists so the ceiling below is reachable from a test: the real
+ * reproduction is an 8.4 MB file of heading lines and takes 92 s to index,
+ * which is not a thing to put in a suite. It defaults to the packing limit and
+ * is not a tuning knob — raising it past 2^21 silently corrupts edge keys.
+ */
+export interface BuildGraphOptions {
+  nodeLimit?: number;
+}
+
+export function buildGraph(
+  store: Store,
+  config: LoreConfig,
+  opts: BuildGraphOptions = {},
+): LoreGraph {
   const db = store.db;
   const ew = config.graph.edgeWeights;
 
@@ -134,7 +150,34 @@ export function buildGraph(store: Store, config: LoreConfig): LoreGraph {
   // across hops is how a walk drowns a two-hop answer under a one-hop wall.
   const acc = new Map<number, { w: number; deep: number }>();
   const BITS = 21; // supports ~2M nodes
-  if (n >= 1 << BITS) throw new Error(`graph too large: ${n} nodes`);
+  const nodeLimit = opts.nodeLimit ?? 1 << BITS;
+  if (n >= nodeLimit) {
+    // `graph too large: 2100001 nodes` was the whole message. It fires on the
+    // RETRIEVAL path, not at index time — `lore index` reports success and then
+    // every search in the vault fails — so the user saw a raw internal number
+    // about a healthy-looking index, naming no file and offering no way out.
+    // A block is one heading-with-no-body, so four bytes of markdown buy a
+    // node and a single machine-generated note can take a whole vault over.
+    // blocksByNote is already built above, so naming the culprit costs nothing.
+    let worst = '';
+    let worstCount = 0;
+    for (const [path, idxs] of blocksByNote) {
+      if (idxs.length > worstCount) {
+        worst = path;
+        worstCount = idxs.length;
+      }
+    }
+    const share = Math.round((worstCount / n) * 100);
+    throw new Error(
+      `graph too large: ${n} nodes (${blockCount} blocks + ${entities.length} ` +
+        `${entities.length === 1 ? 'entity' : 'entities'}), ` +
+        `over the limit of ${nodeLimit}` +
+        (worst
+          ? ` — the largest contributor is ${worst} with ${worstCount} blocks (${share}%). ` +
+            `Add it to "ignore" in .lore/config.json and re-index, or split it into smaller notes.`
+          : '.'),
+    );
+  }
   const addEdge = (a: number, b: number, w: number, deepShare = 1) => {
     if (a === b || w <= 0) return;
     const lo = a < b ? a : b;
