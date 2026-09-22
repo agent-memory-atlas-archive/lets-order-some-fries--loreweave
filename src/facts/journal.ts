@@ -370,10 +370,16 @@ export function extractStructuredFacts(
         .all() as { subject: string; predicate: string }[]
     ).map((r) => `${r.subject}|${r.predicate}`),
   );
+  // valid_until is bound, not hardcoded NULL. user_valid_until takes the same
+  // value for the same reason the journal path gives it one: an explicit close
+  // is the author's intent, and recomputeSupersessions narrows valid_until with
+  // MIN(COALESCE(user_valid_until, …)) — so a row that kept its close only in
+  // valid_until would lose it the first time a successor fact arrived.
   const ins = db.prepare(
     `INSERT INTO facts(subject, predicate, object, subject_display, valid_from, valid_until,
-                       recorded_at, source_type, note_path, block_anchor, confidence)
-     VALUES (?,?,?,?,?,NULL,?,'extracted',?,?,?)`,
+                       recorded_at, source_type, note_path, block_anchor, confidence,
+                       user_valid_until)
+     VALUES (?,?,?,?,?,?,?,'extracted',?,?,?,?)`,
   );
   const tx = db.transaction(() => {
     for (const n of notes) {
@@ -408,10 +414,12 @@ export function extractStructuredFacts(
           f.object,
           f.subject,
           f.validFrom ?? null,
+          f.validUntil ?? null,
           recordedAt,
           n.path,
           f.blockAnchor || null,
           f.confidence,
+          f.validUntil ?? null,
         );
         count++;
       }

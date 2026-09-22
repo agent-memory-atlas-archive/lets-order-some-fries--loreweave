@@ -39,6 +39,15 @@ export interface ExtractedFact {
   blockAnchor: string;
   /** ISO date when frontmatter/text supplied one. */
   validFrom?: string;
+  /**
+   * ISO date the line's own `{valid_until=…}` closed the fact on.
+   *
+   * It was computed below and spread into the result long before it was
+   * declared here, and an undeclared property is an invisible one: the
+   * extracted-fact INSERT wrote a literal NULL into that column and no
+   * typecheck could say it had dropped anything.
+   */
+  validUntil?: string;
   confidence: number;
 }
 

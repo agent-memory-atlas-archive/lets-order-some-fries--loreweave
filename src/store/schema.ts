@@ -15,8 +15,18 @@
  * promise forbids. Bump this whenever parseNote/extractDates output changes;
  * openStore then clears note fingerprints (migration v5's move) so the next
  * incremental run reparses everything.
+ *
+ * v4: also the lever when what is DERIVED from a parse changes, not only
+ * parseNote's own output. Extracted facts dropped every `{valid_until=…}`, so
+ * indexes built before this hold bounded facts stored open-ended. Those rows
+ * are rewritten by rebuildFactsFromNotes, which only runs when an index sees
+ * at least one added/updated/removed note — so without the bump an untouched
+ * vault would keep answering with expired facts until something unrelated was
+ * edited. Clearing the fingerprints makes every note count as updated once,
+ * which is exactly the trigger that pass needs. Since 0.37.x the clear leaves
+ * mtime_ms alone, so this costs one reparse and destroys nothing.
  */
-export const PARSER_VERSION = 3;
+export const PARSER_VERSION = 4;
 
 /**
  * What counts as a NOTE, versioned so a change to the definition repairs the

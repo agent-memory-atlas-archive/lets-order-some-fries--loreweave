@@ -67,6 +67,34 @@ tags: [infra, storage]
     store.close();
   });
 
+  it('trailing {valid_until=…} closes the fact on every form, not just [fact]', async () => {
+    // The sibling key valid_from has worked on all three forms since the
+    // commit above. valid_until was read out of the same attribute block and
+    // then dropped on the floor by the extracted-fact INSERT, so the vault
+    // said a contract ended in June and the store said it is still running.
+    const root = await makeVault({
+      'atlas.md':
+        '# Project Atlas\n\n' +
+        '- vendor:: Northwind Ltd {valid_from=2026-02-01, valid_until=2026-06-01}\n' +
+        '- [vendor2] Southwind Ltd {valid_from=2026-02-01, valid_until=2026-06-01}\n' +
+        '- [fact] Project Atlas :: vendor3 :: Eastwind Ltd {valid_from=2026-02-01, valid_until=2026-06-01}\n',
+    });
+    const store = openStore(':memory:');
+    await indexVault(store, root);
+    const all = queryFacts(store, { subject: 'Project Atlas', includeHistory: true });
+    expect(Object.fromEntries(all.map((f) => [f.predicate, f.validUntil]))).toEqual({
+      vendor: '2026-06-01',
+      vendor2: '2026-06-01',
+      vendor3: '2026-06-01',
+    });
+    // inside the window all three are current …
+    expect(queryFacts(store, { subject: 'Project Atlas', asOf: '2026-04-01' })).toHaveLength(3);
+    // … and three months after every contract ended, none of them is
+    expect(queryFacts(store, { subject: 'Project Atlas', asOf: '2026-09-01' })).toHaveLength(0);
+    expect(queryFacts(store, { subject: 'Project Atlas' })).toHaveLength(0);
+    store.close();
+  });
+
   it('an explicit [fact] line beats an extracted one for the same slot', async () => {
     const root = await makeVault({
       'l.md': '---\ntitle: Ledger\nstatus: draft\n---\n\n# Ledger\n\nBody.\n',
