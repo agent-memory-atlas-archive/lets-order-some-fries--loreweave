@@ -343,13 +343,25 @@ export function openStore(dbPath: string, opts: OpenStoreOptions = {}): Store {
   // indexer trusts mtime+size+hash. Clearing the fingerprints makes the next
   // index reparse the vault — the same healing migration v5 performed, but
   // driven by the parser's version rather than the schema's.
+  //
+  // hash and size only. mtime_ms is half the fingerprint but it is also the
+  // only record of WHEN each note was modified, and five read paths consume
+  // it as a timestamp — lore_context_pack's "recently modified" list,
+  // lore_propose_facts' sample, the recency term in block importance, the
+  // recorded_at a fact derived from a note carries, and resume. Clearing it
+  // did not make the reparse any more certain (size = -1 already fails the
+  // mtime-AND-size short-circuit, hash = '' fails the hash one) and it left
+  // every note claiming to have been modified at 1969-12-31T23:59:59.999Z,
+  // so an agent calling context_pack to orient itself was handed the vault's
+  // ten OLDEST notes labelled as the recent ones. It happens once per user
+  // per release, inside openStore, on a pure read, with nothing printed.
   const stampedParser = db.prepare(`SELECT value FROM meta WHERE key='parser_version'`).get() as
     | { value: string }
     | undefined;
   if (Number(stampedParser?.value ?? 0) !== PARSER_VERSION) {
     try {
       db.transaction(() => {
-        db.exec(`UPDATE notes SET hash = '', mtime_ms = -1, size = -1`);
+        db.exec(`UPDATE notes SET hash = '', size = -1`);
         db.prepare(
           `INSERT INTO meta(key,value) VALUES('parser_version',?)
            ON CONFLICT(key) DO UPDATE SET value=excluded.value`,

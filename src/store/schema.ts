@@ -206,15 +206,17 @@ export const MIGRATIONS: string[] = [
   //
   // The next index must reparse, or existing rows keep the column default and
   // the schema is upgraded while the data still is not. Incremental indexing
-  // short-circuits on mtime AND size before it ever looks at the hash, so all
-  // three are cleared — clearing the hash alone changes nothing.
+  // short-circuits on mtime AND size before it ever looks at the hash, so
+  // clearing the hash alone changes nothing — but size alone is enough, and
+  // mtime_ms is NOT ours to clear: it is also the only record of when each
+  // note was modified. See the note on the same statement in db.ts.
   //
   // A migration that changes what the parser records has to invalidate what
   // the old parser recorded. This is what "the index is a disposable cache"
   // is for.
   `
   ALTER TABLE links ADD COLUMN style TEXT NOT NULL DEFAULT 'wiki';
-  UPDATE notes SET hash = '', mtime_ms = -1, size = -1;
+  UPDATE notes SET hash = '', size = -1;
   `,
   // v6 — the close date a PERSON set, kept apart from the one supersession
   // computes.
@@ -234,6 +236,6 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE facts ADD COLUMN user_valid_until TEXT;
   UPDATE facts SET user_valid_until = valid_until
     WHERE valid_until IS NOT NULL AND superseded_by IS NULL;
-  UPDATE notes SET hash = '', mtime_ms = -1, size = -1;
+  UPDATE notes SET hash = '', size = -1;
   `,
 ];

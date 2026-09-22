@@ -117,12 +117,15 @@ describe('schema migration v5', () => {
   it('forces a reparse so existing rows do not keep the column default', async () => {
     // Incremental indexing short-circuits on mtime AND size before it ever
     // looks at the hash, so a migration that clears only the hash changes
-    // nothing — the schema upgrades and the data does not.
+    // nothing — the schema upgrades and the data does not. Clearing the size
+    // is what breaks that short-circuit; the mtime must survive, because it
+    // is also the note's modified-time and the read paths report it as one.
     const { MIGRATIONS } = await import('../src/store/schema.js');
     const v5 = MIGRATIONS[4] ?? '';
     expect(v5).toContain('style');
-    expect(v5).toMatch(/mtime_ms\s*=\s*-1/);
+    expect(v5).toMatch(/hash\s*=\s*''/);
     expect(v5).toMatch(/size\s*=\s*-1/);
+    expect(v5).not.toMatch(/mtime_ms/);
   });
 
   it('an index written before the column still opens and upgrades', async () => {

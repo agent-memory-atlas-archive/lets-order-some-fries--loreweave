@@ -81,8 +81,10 @@ describe('schema upgrades', () => {
     // consults the hash. A migration that clears only the hash therefore
     // changes nothing: the schema upgrades, the rows keep whatever the old
     // parser put there, and the bug looks fixed because it IS fixed on new
-    // vaults. Measured — the upgrade reported "+0 ~0 -0 =3" until all three
-    // were cleared.
+    // vaults. Measured — the upgrade reported "+0 ~0 -0 =3" until the size
+    // went too. mtime_ms deliberately does NOT go: size = -1 already fails
+    // the short-circuit, and the mtime is the note's modified-time, which
+    // five read paths report to the user.
     const root = await makeVaultAtSchema(4);
     const dbFile = join(root, 'index.db');
 
@@ -103,8 +105,8 @@ describe('schema upgrades', () => {
       size: number;
     };
     expect(row.hash).toBe('');
-    expect(row.mtime_ms).toBe(-1);
     expect(row.size).toBe(-1);
+    expect(row.mtime_ms).toBe(1);
 
     // so the next index actually reparses rather than reporting "unchanged"
     const report = await indexVault(store, root);
