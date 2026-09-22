@@ -95,6 +95,38 @@ tags: [infra, storage]
     store.close();
   });
 
+  it('a frontmatter date is a fallback, not an override of a line that states its own', async () => {
+    // The note-level date is documented as dating "the whole note's
+    // assertions", and it was applied with `=` after every line had already
+    // been parsed — so the more specific signal always lost to the less
+    // specific one. `date:` and `created:` are standard Obsidian frontmatter
+    // that template and daily-note plugins insert by default, so any note
+    // carrying one and also using `{valid_from=…}` was silently re-dated to
+    // when the file was created.
+    const raw =
+      '---\ntitle: Project Atlas\ndate: 2026-01-01\n---\n\n# Project Atlas\n\n' +
+      '- owner:: Priya Raman {valid_from=2026-07-15}\n' +
+      '- vendor:: Northwind Ltd {valid_from=2026-02-01}\n' +
+      '- stage:: fieldwork\n';
+    const got = extractFactsFromNote(parseNote('atlas.md', raw, 1));
+    expect(Object.fromEntries(got.map((f) => [f.predicate, f.validFrom]))).toMatchObject({
+      owner: '2026-07-15',
+      vendor: '2026-02-01',
+      // the line that states no date of its own still takes the note's
+      stage: '2026-01-01',
+    });
+
+    // and the as-of answer moves with it: in March the owner had not started
+    const root = await makeVault({ 'atlas.md': raw });
+    const store = openStore(':memory:');
+    await indexVault(store, root);
+    const asOf = (d: string) =>
+      queryFacts(store, { subject: 'Project Atlas', asOf: d }).map((f) => f.predicate).sort();
+    expect(asOf('2026-03-01')).toEqual(['stage', 'vendor']);
+    expect(asOf('2026-08-01')).toEqual(['owner', 'stage', 'vendor']);
+    store.close();
+  });
+
   it('an explicit [fact] line beats an extracted one for the same slot', async () => {
     const root = await makeVault({
       'l.md': '---\ntitle: Ledger\nstatus: draft\n---\n\n# Ledger\n\nBody.\n',

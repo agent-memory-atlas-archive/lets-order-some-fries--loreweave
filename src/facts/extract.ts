@@ -269,6 +269,12 @@ export function extractFactsFromNote(
     }
   }
 
-  if (validFrom) for (const f of out) f.validFrom = validFrom;
+  // `??=`, not `=`. The note-level date is a FALLBACK — the comment where it
+  // is read says it "dates the whole note's assertions", and a line carrying
+  // its own `{valid_from=…}` has already said more than the note can. The
+  // plain assignment ran after every line was parsed, so the more specific
+  // signal always lost to the less specific one and a role starting in July
+  // was stored as starting on the day the file was created.
+  if (validFrom) for (const f of out) f.validFrom ??= validFrom;
   return out;
 }
