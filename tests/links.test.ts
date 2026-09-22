@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Store } from '../src/store/db.js';
 import { openStore } from '../src/store/db.js';
 import { indexVault } from '../src/index/indexer.js';
 import {
@@ -287,5 +288,74 @@ describe('the name resolver agrees with the rule it replaces', () => {
       { path: 'docs/README.md', title: 'docs' },
     ]);
     expect(idx.get('readme')).toEqual(['README.md', 'docs/README.md']);
+  });
+});
+
+describe('the link graph does not rescan a colliding name once per link', () => {
+  // The equivalence tests above all hand `resolveNoteName` a resolver, so they
+  // stay green even if `buildNoteLinkGraph` stops building one — which is the
+  // whole defect: a vault with one README.md per folder made the graph cost
+  // O(links x bucket), 10s on a 20,000-note handbook, paid on every search.
+  //
+  // Wall clock is flaky on shared hardware, so this counts the work instead.
+  // Every candidate the old scan looked at cost one `path.split('/')`, so the
+  // number of splits charged while building the graph is an exact, machine-
+  // independent stand-in for that scan, and the property to pin is that the
+  // MARGINAL cost of one more link does not grow with the size of the bucket.
+  const fakeStore = (
+    notes: { path: string; title: string }[],
+    links: { note_path: string; target_norm: string }[],
+  ) =>
+    ({
+      db: {
+        prepare: (sql: string) => ({
+          all: () => (sql.includes('FROM notes') ? notes : links),
+        }),
+      },
+    }) as unknown as Store;
+
+  /** Splits charged to build the graph of a vault with `bucket` READMEs and `links` linkers. */
+  const splits = (bucket: number, links: number): number => {
+    const notes: { path: string; title: string }[] = [];
+    // `bucket` notes that all answer to the name "readme"...
+    for (let i = 0; i < bucket; i++) {
+      notes.push({ path: `docs/s${i}/README.md`, title: `section ${i}` });
+    }
+    // ...and notes linking to it, the ordinary [readme](./README.md) shape.
+    const rows: { note_path: string; target_norm: string }[] = [];
+    for (let i = 0; i < links; i++) {
+      const path = `docs/s0/note-${i}.md`;
+      notes.push({ path, title: `note ${i}` });
+      rows.push({ note_path: path, target_norm: 'readme' });
+    }
+    const store = fakeStore(notes, rows);
+    const proto = String.prototype as unknown as { split: (...args: unknown[]) => unknown };
+    const real = proto.split;
+    let n = 0;
+    proto.split = function (this: string, ...args: unknown[]) {
+      n++;
+      return real.apply(this, args);
+    };
+    try {
+      buildNoteLinkGraph(store);
+    } finally {
+      proto.split = real;
+    }
+    return n;
+  };
+
+  /** Extra work per extra link, holding the vault's shape fixed. */
+  const perLink = (bucket: number): number => (splits(bucket, 45) - splits(bucket, 5)) / 40;
+
+  it('costs the same per link whether 250 or 1000 notes share the name', () => {
+    const small = perLink(250);
+    const big = perLink(1000);
+    // Quadratic: ~250 vs ~1000, one split per candidate per link. Linear: both
+    // a small constant. Four times the bucket must not cost four times as much.
+    expect(big).toBeLessThan(small * 1.5 + 5);
+  });
+
+  it('costs a constant number of path splits per link, not one per colliding note', () => {
+    expect(perLink(1000)).toBeLessThan(20);
   });
 });
