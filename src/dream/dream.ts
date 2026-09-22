@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { isHeadingEcho } from '../vault/parse.js';
 import type { LoreContext } from '../context.js';
 import { normalizeKey } from '../normalize.js';
-import { buildNameIndex, resolveNoteName } from '../retrieve/expand.js';
+import { buildNameIndex, buildNameResolver, resolveNoteName } from '../retrieve/expand.js';
 import { safeVaultPath } from '../capture.js';
 import { daysBetween, retrievability } from '../dynamics/fsrs.js';
 import { fitDecay, storeDecay, vaultDecay, type DecayFit } from '../dynamics/fit.js';
@@ -430,13 +430,14 @@ function findLinkSuggestions(ctx: LoreContext): LinkSuggestion[] {
   // note was enumerated last, so a note whose own folder links to it was
   // reported as an orphan — a false accusation a reader would act on.
   const names = buildNameIndex(notes);
+  const resolver = buildNameResolver(names);
   const linked = new Set<string>();
   const links = db.prepare(`SELECT note_path, target_norm FROM links`).all() as {
     note_path: string;
     target_norm: string;
   }[];
   for (const l of links) {
-    const dst = resolveNoteName(names, l.target_norm, l.note_path);
+    const dst = resolveNoteName(names, l.target_norm, l.note_path, resolver);
     if (!dst) continue;
     linked.add(`${l.note_path} ${dst}`);
     linked.add(`${dst} ${l.note_path}`);
@@ -571,6 +572,7 @@ function findOrphans(ctx: LoreContext): string[] {
     title: string;
   }[];
   const names = buildNameIndex(notes);
+  const resolver = buildNameResolver(names);
   const hasLink = new Set<string>();
   const links = db.prepare(`SELECT note_path, target_norm FROM links`).all() as {
     note_path: string;
@@ -578,7 +580,7 @@ function findOrphans(ctx: LoreContext): string[] {
   }[];
   for (const l of links) {
     hasLink.add(l.note_path);
-    const dst = resolveNoteName(names, l.target_norm, l.note_path);
+    const dst = resolveNoteName(names, l.target_norm, l.note_path, resolver);
     if (dst) hasLink.add(dst);
   }
   return notes

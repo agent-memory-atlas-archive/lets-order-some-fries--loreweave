@@ -1,6 +1,6 @@
 import type { Store } from '../store/db.js';
 import { normalizeKey } from '../normalize.js';
-import { buildNameIndex, resolveNoteName } from '../retrieve/expand.js';
+import { buildNameIndex, buildNameResolver, resolveNoteName } from '../retrieve/expand.js';
 import { daysBetween, reinforce, retrievability } from './fsrs.js';
 import { vaultDecay } from './fit.js';
 
@@ -66,13 +66,14 @@ export function updateImportance(store: Store): void {
   // every inbound link to whichever was enumerated last, so one got credit for
   // the other's backlinks.
   const candidates = buildNameIndex(notes);
+  const resolver = buildNameResolver(candidates);
   const links = db.prepare(`SELECT note_path AS src, target_norm FROM links`).all() as {
     src: string;
     target_norm: string;
   }[];
   for (const l of links) {
     outDeg.set(l.src, (outDeg.get(l.src) ?? 0) + 1);
-    const dst = resolveNoteName(candidates, l.target_norm, l.src);
+    const dst = resolveNoteName(candidates, l.target_norm, l.src, resolver);
     if (dst) inDeg.set(dst, (inDeg.get(dst) ?? 0) + 1);
   }
   const upd = db.prepare(`UPDATE blocks SET importance=? WHERE note_path=?`);

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { openStore } from '../src/store/db.js';
 import { indexVault } from '../src/index/indexer.js';
-import { buildNoteLinkGraph } from '../src/retrieve/expand.js';
+import {
+  buildNameIndex,
+  buildNameResolver,
+  buildNoteLinkGraph,
+  resolveNoteName,
+} from '../src/retrieve/expand.js';
 import { makeVault } from './helpers.js';
 import { openStore } from '../src/store/db.js';
 import { parseNote } from '../src/vault/parse.js';
@@ -186,5 +191,101 @@ describe('an ambiguous link resolves to the nearest note', () => {
       'projects/northwind/plan.md',
     ]);
     store.close();
+  });
+});
+
+describe('the name resolver agrees with the rule it replaces', () => {
+  // resolveNoteName used to rescan every candidate for every link, which is
+  // quadratic in the size of a colliding bucket — and the names that collide
+  // are exactly the ones a whole vault links to (README.md, index.md). The
+  // prefix map that replaced the scan has to give the SAME answer, including
+  // the tie-break, or link expansion quietly walks to different notes.
+  const bruteForce = (arr: string[], from: string): string => {
+    const fromDirs = from.split('/').slice(0, -1);
+    let best = arr[0]!;
+    let bestShared = -1;
+    for (const path of arr) {
+      const dirs = path.split('/').slice(0, -1);
+      let shared = 0;
+      while (shared < dirs.length && shared < fromDirs.length && dirs[shared] === fromDirs[shared]) {
+        shared++;
+      }
+      if (shared > bestShared) {
+        bestShared = shared;
+        best = path;
+      }
+    }
+    return best;
+  };
+
+  it('matches brute force on hand-picked shapes', () => {
+    const shapes: string[][] = [
+      ['README.md', 'a/README.md', 'a/b/README.md', 'a/b/c/README.md'],
+      ['a/b/x.md', 'a/c/x.md', 'd/x.md'],
+      ['z/y/n.md', 'a/n.md'],
+      ['a/b/n.md', 'a/b/c/n.md'],
+    ];
+    const froms = [
+      'a/b/c/deep.md',
+      'a/b/other.md',
+      'a/solo.md',
+      'root.md',
+      'd/e/f/g.md',
+      'z/y/sibling.md',
+    ];
+    for (const paths of shapes) {
+      const sorted = [...paths].sort();
+      const candidates = new Map([['n', sorted]]);
+      const resolver = buildNameResolver(candidates);
+      for (const from of froms) {
+        expect(resolveNoteName(candidates, 'n', from, resolver)).toBe(bruteForce(sorted, from));
+      }
+    }
+  });
+
+  it('matches brute force on randomized vault shapes', () => {
+    let seed = 20260922;
+    const rnd = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    const segs = ['a', 'b', 'c', 'd', 'e'];
+    const randPath = () => {
+      const depth = rnd(4);
+      const dirs: string[] = [];
+      for (let i = 0; i < depth; i++) dirs.push(segs[rnd(segs.length)]!);
+      return [...dirs, 'README.md'].join('/');
+    };
+    for (let trial = 0; trial < 300; trial++) {
+      const paths = [...new Set(Array.from({ length: 2 + rnd(8) }, randPath))].sort();
+      if (paths.length < 2) continue;
+      const candidates = new Map([['readme', paths]]);
+      const resolver = buildNameResolver(candidates);
+      for (let q = 0; q < 8; q++) {
+        const from = randPath().replace(/README\.md$/, 'note.md');
+        expect(resolveNoteName(candidates, 'readme', from, resolver)).toBe(
+          bruteForce(paths, from),
+        );
+      }
+    }
+  });
+
+  it('a name only one note answers to never enters the resolver', () => {
+    const candidates = new Map([
+      ['solo', ['x/solo.md']],
+      ['readme', ['x/README.md', 'y/README.md']],
+    ]);
+    const resolver = buildNameResolver(candidates);
+    expect(resolver.has('solo')).toBe(false);
+    expect(resolveNoteName(candidates, 'solo', 'q/w.md', resolver)).toBe('x/solo.md');
+    expect(resolveNoteName(candidates, 'nothing', 'q/w.md', resolver)).toBeUndefined();
+  });
+
+  it('buildNameIndex still de-duplicates a note that answers to one name twice', () => {
+    const idx = buildNameIndex([
+      { path: 'README.md', title: 'readme' },
+      { path: 'docs/README.md', title: 'docs' },
+    ]);
+    expect(idx.get('readme')).toEqual(['README.md', 'docs/README.md']);
   });
 });
