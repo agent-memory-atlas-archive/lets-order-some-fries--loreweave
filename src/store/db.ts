@@ -221,6 +221,62 @@ export function openStore(dbPath: string, opts: OpenStoreOptions = {}): Store {
       throw err;
     }
   }
+  // meta.schema_version is the only stamp with no guard in either direction,
+  // and the migration loop below consults it with `<` alone — so any value the
+  // loop cannot interpret is absorbed instead of refused. Measured at v6:
+  // a stamp of '9' let every command run and answer normally (with a
+  // hand-applied plausible v7, the old binary served the row the newer schema
+  // had flagged); a stamp of 'six' became NaN, skipped the loop, and — since
+  // NaN !== NaN — was written back as the literal string 'NaN' on every open,
+  // permanently disabling migrations and putting a write on the read path;
+  // a stamp of '' became 0 and re-ran all six migrations into "table notes
+  // already exists", which the rollback then made permanent.
+  //
+  // Both checks are pure reads of one row, on the path of every command
+  // including the pure readers, and they run before anything else touches the
+  // file.
+  {
+    const hasMeta = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='meta'`)
+      .get();
+    const stamp = hasMeta
+      ? (db.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get() as
+          | { value: string }
+          | undefined)
+      : undefined;
+    if (stamp !== undefined) {
+      if (!/^\s*\d+\s*$/.test(stamp.value)) {
+        // The value carries no information, so there is nothing to migrate
+        // from. Route it into the reset that already exists for a corrupt
+        // file rather than throwing: the index is a derived cache.
+        if (heal && snapshotDir === null && !readonly) {
+          db.close();
+          rmSync(dbPath, { force: true });
+          rmSync(`${dbPath}-wal`, { force: true });
+          rmSync(`${dbPath}-shm`, { force: true });
+          opts.onHeal?.(`index was corrupt and has been reset — re-run 'lore index' to rebuild`);
+          db = new Database(dbPath);
+        } else {
+          // Nothing to reset into: healing is off, or the file is read-only
+          // and what we hold is a snapshot copy of it.
+          throw new Error(
+            `index schema stamp is not a version number (${JSON.stringify(stamp.value)}) — the index is corrupt; delete .lore/ and re-index`,
+          );
+        }
+      } else if (Number(stamp.value) > MIGRATIONS.length) {
+        // Deliberately a refusal and not a reset. The data is intact and
+        // re-indexing a large vault is expensive, so deleting someone's index
+        // because they ran an old binary once would be the wrong trade — and
+        // the bound comes from MIGRATIONS.length, never a hand-kept constant,
+        // so a build can always satisfy its own stamp.
+        throw new Error(
+          `index schema v${Number(stamp.value)} was written by a newer loreweave ` +
+            `(this build knows v${MIGRATIONS.length}) — upgrade loreweave, or delete .lore/ and re-index`,
+        );
+      }
+    }
+  }
+
   // busy_timeout must be set first: `journal_mode = WAL` needs a brief
   // exclusive lock, so setting the timeout afterwards left the one pragma
   // most likely to collide with no timeout at all.

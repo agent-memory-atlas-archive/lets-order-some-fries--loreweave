@@ -112,3 +112,81 @@ describe('schema upgrades', () => {
     store.close();
   });
 });
+
+/**
+ * meta.schema_version is the only stamp with no guard in either direction.
+ *
+ * Its neighbours self-heal: parser_version and note_gate_version are both
+ * compared with !==, so an older binary re-runs its own work and a later
+ * upgrade re-runs the newer work. schema_version is compared with `<` by the
+ * migration loop alone, so anything the loop cannot interpret is absorbed
+ * silently instead of refused.
+ */
+describe('schema stamp guards', () => {
+  async function stamp(value: string): Promise<string> {
+    const root = await makeVaultAtSchema(MIGRATIONS.length);
+    const dbFile = join(root, 'index.db');
+    const db = new Database(dbFile);
+    db.prepare(`UPDATE meta SET value=? WHERE key='schema_version'`).run(value);
+    db.close();
+    return dbFile;
+  }
+
+  it('refuses an index stamped by a newer loreweave instead of answering from it', async () => {
+    // Measured before the guard: with schema_version=9 against 6 migrations
+    // the loop simply did not run, and `search`, `doctor` and `stats` all
+    // exited 0 without mentioning the version. With a plausible v7 applied by
+    // hand (a column the newer schema uses to exclude a note) the v6 binary
+    // returned the excluded note — answering from an index it does not
+    // understand, which is the one thing this tool must not do.
+    const dbFile = await stamp(String(MIGRATIONS.length + 3));
+    expect(() => openStore(dbFile)).toThrow(/newer loreweave/);
+  });
+
+  it('treats a stamp that is not a version number as corrupt rather than writing back NaN', async () => {
+    // Measured before the guard: 'six' -> Number() NaN -> the loop is skipped,
+    // and because NaN !== NaN the stamp was rewritten as the literal string
+    // 'NaN' — on every open, turning the migration system into a permanent
+    // no-op and putting a write on the read path.
+    const dbFile = await stamp('six');
+    const healed: string[] = [];
+    const store = openStore(dbFile, { onHeal: (m) => healed.push(m) });
+    const after = store.db.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get() as {
+      value: string;
+    };
+    expect(after.value).not.toBe('NaN');
+    expect(Number(after.value)).toBe(MIGRATIONS.length);
+    expect(healed.join(' ')).toMatch(/corrupt/);
+    store.close();
+  });
+
+  it('an empty stamp is corrupt too, and does not re-run every migration', async () => {
+    // Measured before the guard: '' -> Number() 0 -> all six migrations re-run
+    // against tables that already exist -> "table notes already exists", raw
+    // SQLite text, and the rollback leaves the bad stamp in place so every
+    // future command fails the same way, forever.
+    const dbFile = await stamp('');
+    const healed: string[] = [];
+    const store = openStore(dbFile, { onHeal: (m) => healed.push(m) });
+    const after = store.db.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get() as {
+      value: string;
+    };
+    expect(Number(after.value)).toBe(MIGRATIONS.length);
+    expect(healed.join(' ')).toMatch(/corrupt/);
+    store.close();
+  });
+
+  it('a current stamp still opens without a single write', async () => {
+    // The stamp-only-when-changed optimisation at the end of migrate() is what
+    // makes a read-only index readable at all; the NaN re-stamp defeated it.
+    // Pinned as a property — zero row changes on the connection — rather than
+    // by timing anything.
+    const root = await makeVaultAtSchema(MIGRATIONS.length);
+    const dbFile = join(root, 'index.db');
+    openStore(dbFile).close(); // first open stamps parser_version
+    const store = openStore(dbFile);
+    const { c } = store.db.prepare(`SELECT total_changes() AS c`).get() as { c: number };
+    expect(c).toBe(0);
+    store.close();
+  });
+});
