@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { openContext, ensureIndexed, type LoreContext } from '../context.js';
-import { configIndexOptions, indexVault } from '../index/indexer.js';
+import { configIndexOptions, indexState, indexVault } from '../index/indexer.js';
 import { isReadonlyError, readonlyError } from '../store/db.js';
 import { search } from '../retrieve/search.js';
 import {
@@ -172,6 +172,12 @@ export function createLoreMcpServer(ctx: LoreContext): McpServer {
         openFacts: c(
           'SELECT COUNT(*) c FROM facts WHERE valid_until IS NULL AND superseded_by IS NULL',
         ),
+        // ensureIndexed repairs a half-built index at startup, so this can
+        // only appear when repair was impossible (a read-only .lore). Then
+        // these counts describe the INDEX and not the vault, and an agent
+        // reading "notes: 1548" for a 3 000-note vault has nothing else to
+        // go on. An added key breaks no consumer; no existing field moves.
+        ...(indexState(ctx.store) === 'interrupted' ? { indexIncomplete: true } : {}),
       };
       // Say when a list is a sample rather than the whole set, and what to
       // call for the rest. Every list here is capped, and an agent handed 30
@@ -518,8 +524,13 @@ export async function startMcpServer(ctx: LoreContext): Promise<void> {
   // Before serving a single request. An agent handed an empty index does not
   // get an error it can react to — it gets `[]`, and reports to the user that
   // they have nothing written on the subject.
-  await ensureIndexed(ctx, (n) =>
-    console.error(`[loreweave mcp] first run: indexing ${n} notes…`),
+  await ensureIndexed(
+    ctx,
+    (n) => console.error(`[loreweave mcp] first run: indexing ${n} notes…`),
+    (n) =>
+      console.error(
+        `[loreweave mcp] previous index did not finish (${n} notes indexed); rebuilding…`,
+      ),
   );
   const server = createLoreMcpServer(ctx);
   // Watch the vault for the whole life of the server. This process runs for a

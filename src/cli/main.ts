@@ -169,9 +169,24 @@ export function buildProgram(io: { out: (s: string) => void; err: (s: string) =>
     const ctx = openContext(vaultRoot());
     try {
       if (opts.autoIndex) {
-        await ensureIndexed(ctx, (n) =>
-          console.error(`[loreweave] first run: indexing ${n} notes…`),
+        await ensureIndexed(
+          ctx,
+          (n) => console.error(`[loreweave] first run: indexing ${n} notes…`),
+          (n) =>
+            io.err(
+              `[loreweave] previous index did not finish (${n} notes indexed); rebuilding…`,
+            ),
         );
+        // Here rather than per-command, so search, ask, timeline, dream and
+        // every other autoIndex command gets it. It only fires when the
+        // rebuild above could not run — a read-only index — because otherwise
+        // the state is clean by now. stderr, not stdout: the caveat must not
+        // land in output a script is parsing.
+        if (indexState(ctx.store) === 'interrupted') {
+          io.err(
+            'index: INCOMPLETE (a previous index did not finish) — results describe the partial index, not the vault; run `lore index`',
+          );
+        }
       }
       return await fn(ctx);
     } catch (err) {

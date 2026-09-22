@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.37.3 — 2026-09-22
+
+- **Search no longer answers from an index that a Ctrl-C left half-built.** An index
+  interrupted during its first build stops part-way and leaves a dead PID in
+  `meta.index_in_progress`. `lore stats` and `lore doctor` have always reported that
+  ("index: INCOMPLETE"), but they were the only two callers that asked: `lore search`,
+  `lore ask` and every MCP tool answered from whatever fraction happened to be indexed
+  and said nothing. Measured on a 3 000-note vault, a plain Ctrl-C 1.2 s in left 1 947
+  notes (65%); `lore search` for a note in the missing third printed "no results" and
+  exited 0, and `lore_context_pack` reported `notes: 1947` with no caveat in the payload.
+  SIGINT, SIGTERM and SIGHUP all leave the identical state, so the trigger is an ordinary
+  Ctrl-C, not a crash. `ensureIndexed` now extends the rule it already enforced — never
+  answer from an index that was never built — to an index known to be half-built, and
+  rebuilds it first, announcing itself on stderr before the work starts. This is the same
+  repair `lore index` already performed; the reading commands no longer require the user
+  to know they must run it.
+- **A half-built index that cannot be repaired now says so.** On a read-only `.lore` the
+  rebuild is impossible, so the CLI prints the caveat `stats` already used to stderr
+  (stdout is untouched, so nothing parsing `lore search` moves), and `lore_context_pack`
+  carries an additive `stats.indexIncomplete: true`. No other field or result shape changes.
+
 ## 0.37.2 — 2026-09-22
 
 - **A note deleted since the last index no longer breaks every search.** 0.37.1's

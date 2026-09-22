@@ -4,7 +4,7 @@ import { openStore, type Store } from './store/db.js';
 import { resolveProvider, type EmbeddingProvider } from './embed/index.js';
 import { buildGraph, type LoreGraph } from './graph/build.js';
 import { buildNoteLinkGraph, type NoteLinkGraph } from './retrieve/expand.js';
-import { configIndexOptions, indexVault } from './index/indexer.js';
+import { configIndexOptions, indexState, indexVault } from './index/indexer.js';
 import { scanVault, whyNotNote } from './vault/scan.js';
 import { NOTE_GATE_VERSION } from './store/schema.js';
 
@@ -132,13 +132,45 @@ export function reconcileNoteGate(ctx: LoreContext): number {
   return dropped;
 }
 
+/**
+ * No command that answers questions about note CONTENT may answer from an
+ * index that does not describe the vault.
+ *
+ * That rule used to mean only "never answer from an index that was never
+ * built". But an index interrupted part-way through its first build is the
+ * same lie with better camouflage: measured on a 3 000-note vault, a plain
+ * Ctrl-C 1.2 s in left 1 548 notes indexed (52%) and a dead PID in
+ * `meta.index_in_progress`. `stats` and `doctor` both said INCOMPLETE — they
+ * are the only two callers of indexState — while `lore search` and every MCP
+ * tool answered from the 52% and said nothing, because the row count was
+ * greater than zero and this function returned immediately. SIGINT, SIGTERM
+ * and SIGHUP all leave that identical state, so the trigger is ordinary.
+ *
+ * `lore index` already performs exactly this repair (indexVault detects the
+ * stale marker itself and forces a full rebuild); the only change is that the
+ * reading commands no longer require the user to know they must run it.
+ */
 export async function ensureIndexed(
   ctx: LoreContext,
   onFirstIndex?: (noteCount: number) => void,
+  onRepair?: (noteCount: number) => void,
 ): Promise<boolean> {
   const row = ctx.store.db.prepare('SELECT COUNT(*) c FROM notes').get() as { c: number };
   if (row.c > 0) {
     reconcileNoteGate(ctx);
+    // A read-only index cannot be repaired — assertWritable() would throw —
+    // so there the caveat printed by the CLI and carried in the MCP context
+    // pack is all that is left. 'running' means another process is indexing
+    // right now and must not be second-guessed.
+    if (indexState(ctx.store) === 'interrupted' && !ctx.store.readonly) {
+      // Announced before the work, not after: this is a full index arriving
+      // behind what looked like a cheap read, and on an embedding-configured
+      // vault it is not quick.
+      onRepair?.(row.c);
+      await indexVault(ctx.store, ctx.root, configIndexOptions(ctx.config));
+      ctx.invalidateGraph();
+      return true;
+    }
     return false;
   }
   const files = await scanVault(ctx.root, ctx.config.ignore);
