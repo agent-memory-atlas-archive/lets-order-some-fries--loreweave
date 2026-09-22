@@ -311,21 +311,71 @@ const GENERIC_BASENAMES = new Set([
  * A date-only YAML value lands exactly on midnight UTC; anything with a real
  * time component keeps its full ISO form.
  */
-function normalizeFrontmatterValue(v: unknown): unknown {
+function normalizeFrontmatterValue(v: unknown, budget: Budget): unknown {
+  if (budget.visits++ > FRONTMATTER_VISIT_CAP || --budget.left < 0) throw new FrontmatterTooLarge();
   if (v instanceof Date) {
     if (Number.isNaN(v.valueOf())) return String(v);
     const iso = v.toISOString();
     return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
   }
-  if (Array.isArray(v)) return v.map(normalizeFrontmatterValue);
+  if (Array.isArray(v)) return v.map((item) => normalizeFrontmatterValue(item, budget));
   if (v && typeof v === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      out[k] = normalizeFrontmatterValue(val);
+      out[k] = normalizeFrontmatterValue(val, budget);
     }
     return out;
   }
   return v;
+}
+
+/**
+ * YAML anchors make frontmatter a graph, and the copy above turns it into a
+ * tree. js-yaml resolves an alias by SHARING the node it points at, so
+ * `a1: &a1 [*a0 x9]` repeated eight times is 9^9 logical entries in 486 bytes
+ * that cost js-yaml almost nothing — the whole expansion happens here, and
+ * again in JSON.stringify on the way into the index. Measured: a 300-byte note
+ * produced 3.7 MB of frontmatter JSON, a 486-byte one exhausted the heap and
+ * left the vault unindexable forever, because the "previous index did not
+ * finish, rebuilding" path re-ran the same crash.
+ *
+ * So the copy is budgeted. A key whose value does not fit is dropped whole
+ * rather than half-copied, and its cost refunded, so the honest keys written
+ * after a hostile one still land — `title:` survives even when `a5:` does not.
+ * The visit cap bounds the total walk, since a note can hold many such keys.
+ * 20,000 nodes is far past any frontmatter anyone writes by hand (a 400-tag
+ * list is 401) and small enough that the worst case is a few hundred KB.
+ */
+const FRONTMATTER_NODE_BUDGET = 20_000;
+const FRONTMATTER_VISIT_CAP = 1_000_000;
+
+class FrontmatterTooLarge extends Error {}
+
+type Budget = { left: number; visits: number };
+
+function normalizeFrontmatter(
+  fm: Record<string, unknown>,
+  warnings: string[],
+): Record<string, unknown> {
+  const budget: Budget = { left: FRONTMATTER_NODE_BUDGET, visits: 0 };
+  const out: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [k, val] of Object.entries(fm)) {
+    const before = budget.left;
+    try {
+      out[k] = normalizeFrontmatterValue(val, budget);
+    } catch (err) {
+      if (!(err instanceof FrontmatterTooLarge)) throw err;
+      budget.left = before;
+      dropped.push(k);
+    }
+  }
+  if (dropped.length) {
+    warnings.push(
+      `frontmatter too large after alias expansion — truncated (dropped: ${dropped.join(', ')})`,
+    );
+  }
+  return out;
 }
 
 /**
@@ -486,7 +536,7 @@ export function parseNote(path: string, raw: string, mtimeMs: number, size?: num
   return {
     path,
     title,
-    frontmatter: normalizeFrontmatterValue(fm) as Record<string, unknown>,
+    frontmatter: normalizeFrontmatter(fm, warnings),
     tags: [...tagSet],
     links,
     blocks,
