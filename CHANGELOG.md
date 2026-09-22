@@ -1,6 +1,63 @@
 # Changelog
 
-## 0.37.3 — 2026-09-22
+## 0.38.0 — 2026-09-23
+
+A nine-fix hardening round. Every fault below was reproduced against a real vault before it was
+fixed, and re-reproduced independently before it was believed. **One breaking change for MCP
+consumers**, called out in the `lore_query_facts` entry.
+
+- **A 486-byte note could wedge a vault permanently.** Frontmatter is parsed by gray-matter, which
+  is js-yaml 3 underneath, and js-yaml resolves an alias by *sharing* the node it points at — so a
+  billion-laughs bomb costs it almost nothing, because what it returns is a graph, not a tree.
+  `normalizeFrontmatterValue` then deep-copied that graph, which is precisely the step that walks
+  every path through it, and `JSON.stringify` materialised the result a second time on the way into
+  the notes table. A note small enough to arrive by any ordinary route — a clipped page, a shared
+  file, agent output — exhausted the heap, and because the note stayed in the vault, every
+  subsequent index, search and MCP call died the same way. The walk is now bounded and the note is
+  reported by name instead of taking the process with it.
+- **Upgrading no longer erases when each note was modified.** The fingerprint wipe that runs on a
+  parser or schema bump was `UPDATE notes SET hash = '', mtime_ms = -1, size = -1`. `mtime_ms` is
+  half a cache fingerprint — but it is also the only record loreweave keeps of when a note was
+  modified, and five read paths spend it as a real timestamp. The visible effect landed on the
+  surface documented as "call once at session start to orient": `lore_context_pack` returned the
+  vault's ten *oldest* notes as its `recentNotes`, and facts derived from note mtime were stamped
+  1969-12-31. `size = -1` alone already forces the reparse, so the timestamp now survives.
+- **The vault boundary held on the write side and leaked on the read side.** `lore_capture` refuses
+  to write through a symlink that leaves the real vault and its description promises exactly that.
+  Reading had the opposite rule — `readNoteRaw` checked only lexical containment, and the scanner
+  followed links by default — so a vault containing a symlink to a file outside it indexed that
+  file and returned its contents from `lore search`. Both sides now enforce the promise the
+  description makes.
+- **Past two hundred facts the store answered "no such fact" by first letter.** `queryFacts` ended
+  in `LIMIT 200` under `ORDER BY subject`, so every caller that passed no subject got the
+  alphabetically first two hundred rows and nothing that said so. `lore ask` was the worst of the
+  three surfaces sitting on it: it filtered those rows by the question's own words in JS, so a
+  question about a subject late in the alphabet was answered from facts that had already been cut.
+  The query now reports the real total, takes a `limit`, and pushes the term match into SQL.
+  **Visible change:** MCP `lore_query_facts` now returns `{ facts, truncated? }` instead of a bare
+  array — a consumer reading `result[0]` must now read `result.facts[0]`. `lore facts` gains
+  `--limit` and prints "showing N of M facts".
+- **A contract that ended in June was stored as still running.** `{valid_until=…}` was parsed and
+  then dropped for two of the three fact syntaxes, because `ExtractedFact` declared no such field
+  and an undeclared property is an invisible one — the INSERT wrote a literal NULL. A fact that was
+  true until a date read as true forever.
+- **Two installed versions on one vault no longer undo each other's parse.** Round 3 gave the schema
+  stamp a forward guard and wrote the reason beside it. The parser stamp twenty lines down still
+  compared with `!==`, so an older binary silently rewrote the stamp *down* and wiped every
+  fingerprint; the newer one then did the same in reverse. Each flip forced a full reparse of the
+  whole vault. The guard is now the same in both places.
+- **A clipped article could sign a memory with the user's name.** Fact replay reads `- [fact]` lines
+  out of every note, not only out of `lore/journal/`, and it took the source tier from the line's
+  own attribute block. Any note in the vault could therefore declare `{source=stated,
+  confidence=1}` and have loreweave report it to the agent as something the user had asserted.
+  Those attributes are now honoured only inside loreweave's own journal.
+- **A note's creation date overwrote every date the note actually stated.** A frontmatter `date:` or
+  `created:` was documented as the fallback for lines that carry no date of their own; it was in
+  fact applied to all of them, backdating explicitly dated facts by months.
+- **A single oversized note no longer breaks search for the whole vault** with `graph too large: N
+  nodes` and no indication of which note. The ceiling now names the note responsible.
+
+### Also in this release (previously staged as 0.37.3)
 
 - **Search no longer answers from an index that a Ctrl-C left half-built.** An index
   interrupted during its first build stops part-way and leaves a dead PID in
